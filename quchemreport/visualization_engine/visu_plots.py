@@ -10,9 +10,9 @@ def absoUV(et_energies, et_oscs, xvalues, spectrum, file_name=None):
     x = xvalues
     y = spectrum[0]
     ax[0].plot(x,y)                                
-    ax[0].set(ylabel='$\epsilon$ / L mol$^{-1}$ cm$^{-1}$')
+    ax[0].set(ylabel=r'$\epsilon$ / L mol$^{-1}$ cm$^{-1}$')
     secax = ax[0].secondary_xaxis('top', functions=(units.nm2wnb, units.wnb2nm)) # Needs Matplotlib 3.1 ! experimental
-    secax.set_xlabel('$\lambda$ / nm')
+    secax.set_xlabel(r'$\lambda$ / nm')
     # Second plot specific lines
     x2 = et_energies
     y2 = et_oscs
@@ -36,9 +36,9 @@ def emiUV(et_energies, et_oscs, xvalues, spectrum, file_name=None):
     x = xvalues
     y = spectrum[0]
     ax[0].plot(x,y)                                
-    ax[0].set(ylabel='molar emission / L mol$^{-1}$ cm$^{-1}$')
+    ax[0].set(ylabel=r'molar emission / L mol$^{-1}$ cm$^{-1}$')
     secax = ax[0].secondary_xaxis('top', functions=(units.nm2wnb, units.wnb2nm)) # Needs Matplotlib 3.1 ! experimental
-    secax.set_xlabel('$\lambda$ / nm')
+    secax.set_xlabel(r'$\lambda$ / nm')
     # Second plot specific lines
     x2 = et_energies
     y2 = et_oscs
@@ -47,7 +47,7 @@ def emiUV(et_energies, et_oscs, xvalues, spectrum, file_name=None):
     ax[1].set(ylabel='Oscillator strength')
     # Common lines for the 2 plots
     plt.gca().invert_xaxis()                        
-    plt.xlabel('Wavenumber / cm$^{-1}$')
+    plt.xlabel(r'Wavenumber / cm$^{-1}$')
     plt.minorticks_on()
     fig = plt.gcf()
     fig.set_size_inches(6, 6)
@@ -64,9 +64,9 @@ def absoCD(et_energies, et_rotats, xvalues, CDspectrum, file_name=None):
     y = CDspectrum[0]
     ax[0].plot(x,y)                                
     ax[0].axhline(y=0,color='black',ls='--')
-    ax[0].set(ylabel='$\Delta \epsilon$ / L mol$^{-1}$ cm$^{-1}$')
+    ax[0].set(ylabel=r'$\Delta \epsilon$ / L mol$^{-1}$ cm$^{-1}$')
     secax = ax[0].secondary_xaxis('top', functions=(units.nm2wnb, units.wnb2nm)) # Needs Matplotlib 3.1 ! experimental
-    secax.set_xlabel('$\lambda$ / nm')
+    secax.set_xlabel(r'$\lambda$ / nm')
     # Second plot specific lines
     x2 = et_energies
     y2 = et_rotats
@@ -75,7 +75,7 @@ def absoCD(et_energies, et_rotats, xvalues, CDspectrum, file_name=None):
     ax[1].set(ylabel='Rotational strength')
     # Common lines for the 2 plots
     plt.gca().invert_xaxis()                        
-    plt.xlabel('Wavenumber / cm$^{-1}$')
+    plt.xlabel(r'Wavenumber / cm$^{-1}$')
     plt.minorticks_on()
     fig = plt.gcf()
     fig.set_size_inches(6, 6)
@@ -91,9 +91,9 @@ def emiCD(et_energies, et_rotats, xvalues, CDspectrum, file_name=None):
     y = CDspectrum[0]
     ax[0].plot(x,y)                                
     ax[0].axhline(y=0,color='black',ls='--')
-    ax[0].set(ylabel='$\Delta molar emission / L mol$^{-1}$ cm$^{-1}$')
+    ax[0].set(ylabel=r'$\Delta molar emission / L mol$^{-1}$ cm$^{-1}$')
     secax = ax[0].secondary_xaxis('top', functions=(units.nm2wnb, units.wnb2nm)) # Needs Matplotlib 3.1 ! experimental
-    secax.set_xlabel('$\lambda$ / nm')
+    secax.set_xlabel(r'$\lambda$ / nm')
     # Second plot specific lines
     x2 = et_energies
     y2 = et_rotats
@@ -102,7 +102,7 @@ def emiCD(et_energies, et_rotats, xvalues, CDspectrum, file_name=None):
     ax[1].set(ylabel='Rotational strength')
     # Common lines for the 2 plots
     plt.gca().invert_xaxis()                        
-    plt.xlabel('Wavenumber / cm$^{-1}$')
+    plt.xlabel(r'Wavenumber / cm$^{-1}$')
     plt.minorticks_on()
     fig = plt.gcf()
     fig.set_size_inches(6, 6)

@@ -383,9 +383,9 @@ def Potential(data_model: LogData, grid_step=obk_step, nproc=4):
     # You can impose the number of voxels with mgrid if the last argument is a complex
     # It is a solution chosen due to missing voxels on one direction in some cases
     TIx, TIy, TIz = rho.shape
-    X_, Y_, Z_ = np.mgrid[ np.around(dx*(1 - TIx)) : np.around(dx*TIx): np.complex(TIx*2-1),
-                           np.around(dy*(1 - TIy)) : np.around(dy*TIy) : np.complex(TIy*2-1),
-                           np.around(dz*(1 - TIz)) : np.around(dz*TIz) : np.complex(TIz*2-1) ]
+    X_, Y_, Z_ = np.mgrid[ np.around(dx*(1 - TIx)) : np.around(dx*TIx): complex(TIx*2-1),
+                           np.around(dy*(1 - TIy)) : np.around(dy*TIy) : complex(TIy*2-1),
+                           np.around(dz*(1 - TIz)) : np.around(dz*TIz) : complex(TIz*2-1) ]
 #    from orbkit import grid
 #    X_, Y_, Z_ = np.mgrid[grid.min_[0] *2 : grid.max_[0] *2 : dx, 
 #                          grid.min_[1] *2 : grid.max_[1] *2 : dy, 

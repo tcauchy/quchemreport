@@ -22,17 +22,17 @@ common_solver:
 
 # type can be a single job or a list of jobs (ex: [opt, freq, td])
 logfiles:
-  - path: "test/test_data/H2O_FREQ.log"
+  - path: "/applis/quchemreport/examples/H2O_FREQ.log"
     type: ['freq', 'opt']
-  - path: "test/test_data/H2O_OPT.log"
+  - path: "/applis/quchemreport/examples/H2O_OPT.log"
     type: opt
     # Reference means that it include all the information for the generation of MO pictures (basis set, MO coeeficients, etc)
     reference: true
-  - path: "test/test_data/H2O_TD.log"
+  - path: "/applis/quchemreport/examples/H2O_TD.log"
     type: td
-  - path: "test/test_data/H2O_OPT_ES_fixed.log"
-    type: opt_es
-    excited_state_number: 1
+      #- path: "/applis/quchemreport/examples/H2O_OPT_ES.log"
+      #type: opt_es
+      #excited_state_number: 1
 
 quality_control:
   # method_consistency : strict | lax
@@ -80,7 +80,7 @@ output:
         # Using the keywords "homo" or "lumo", optionally followed by a signed integer offset.
         # Used by both energies (text) and MO_diagrams. If omitted, neither output will be generated.
         # This liste is required if the Energies output or the MO Diagrams output is enabled
-        MO_list: ["lumo+1", "lumo", "homo", "homo-1" ]
+        MO_list: ["homo-1", "homo", "lumo", "lumo+1" ]
 
         # Display the energies of the selected orbitals from the MO_list if they are available in the data
         energies: true
@@ -118,8 +118,8 @@ output:
     # (neutral molecule) with either an anion state (one electron less)
     # and/or a cation state (one electron more), using the same molecular geometry.
     reactivity:
-      CDFT_indices: true
-      fukui_functions: true
+      CDFT_indices: false
+      fukui_functions: false
 
     excited_states:
       # Selection of the excited state is necessary when enabling
@@ -138,10 +138,10 @@ output:
     optimized_excited_states:
       # Disabling any of the outputs below will only hide them from the final report.
       # The data may still be computed as the transitions are needed for the electron_density_difference (EDD).
-      transitions: true
-      emission_spectrum: true
-      CPL_spectrum: true
-      electron_density_difference: true
+      transitions: false
+      emission_spectrum: false
+      CPL_spectrum: false
+      electron_density_difference: false
 
 logging:
   #⚠️ Warning : Logs in the console is mandatory for now.
