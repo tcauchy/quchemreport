@@ -329,7 +329,7 @@ def viz_EDD(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file
                 figure = _set_cam(figure, "cam1")
                 mlab.savefig("{}-EDD-T{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
                 figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-EDD-S{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-EDD-T{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
             else:
                 figure = _set_cam(figure, "cam1")
                 mlab.savefig("{}-EDD-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)

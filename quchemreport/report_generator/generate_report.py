@@ -1523,14 +1523,18 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
             continue
         
         for k in range(len(et_transitions)):
-            nomPng = f"img-log{log_idx+1}-EDD-S{k+1}.png"
-            nomPng_cam2 = f"img-log{log_idx+1}-EDD-S{k+1}_cam2.png"  
+            # viz_EDD names singlet states EDD-S<n> and triplet states EDD-T<n>
+            for spin_letter in ("S", "T"):
+                nomPng = f"img-log{log_idx+1}-EDD-{spin_letter}{k+1}.png"
+                if os.path.isfile(output_dir + nomPng):
+                    break
+            nomPng_cam2 = f"img-log{log_idx+1}-EDD-{spin_letter}{k+1}_cam2.png"
             
             if (os.path.isfile(output_dir + nomPng)) :
                 if (os.path.isfile(output_dir + nomPng_cam2)) :
-                    figure_two_col(section, nomPng, nomPng_cam2, caption=f"Representation of the Electron Density Difference (S{k+1}) from two points of view. (Source: {log_file})")
+                    figure_two_col(section, nomPng, nomPng_cam2, caption=f"Representation of the Electron Density Difference ({spin_letter}{k+1}) from two points of view. (Source: {log_file})")
                 else:
-                    figure_one_col(section, nomPng, caption=f"Representation of the Electron Density Difference (S{k+1}). (Source: {log_file})")
+                    figure_one_col(section, nomPng, caption=f"Representation of the Electron Density Difference ({spin_letter}{k+1}). (Source: {log_file})")
                 
                 if (isContentAdded == False):
                     isContentAdded = True
