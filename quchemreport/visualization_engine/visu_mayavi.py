@@ -3,6 +3,8 @@
 
 from mayavi import mlab
 import numpy as np
+import functools
+import inspect
 from sys import exit
 import os
 from math import sqrt, acos, atan2
@@ -18,6 +20,64 @@ from quchemreport.utility_services import units
 from quchemreport.utility_services.parameters import img_width, img_height, surf_opacity, colors, scale, azimuth_cam1, azimuth_cam2, elev_angle_cam1, elev_angle_cam2
 width = img_width
 height = img_height
+
+
+def set_image_size(pixels):
+    """Side in pixels of the square images saved by the viz_* functions (config output.image_size)."""
+    global width, height
+    width = height = int(pixels)
+
+
+def _size(size):
+    return size if size is not None else (width, height)
+
+
+## Images are drawn on every k-th point of the computation grid (config
+## output.image_grid_reduction). The values are those already computed: no
+## interpolation, the numerical results keep the full grid.
+## "smooth": MO, MEP (and NTO, reduced when computed, see
+## generate_visualization.output_nto_images); "sensitive": EDD, Oif, Fukui, Fdual.
+image_grid_reduction = {"smooth": 1, "sensitive": 1}
+
+
+def set_image_grid_reduction(smooth, sensitive):
+    image_grid_reduction["smooth"] = max(1, int(smooth))
+    image_grid_reduction["sensitive"] = max(1, int(sensitive))
+
+
+def _reduce_values(values, s):
+    if values is None:
+        return None
+    if isinstance(values, (list, tuple)):
+        return [np.asarray(v)[s] for v in values]
+    values = np.asarray(values)
+    return values[(slice(None),) + s] if values.ndim == 4 else values[s]
+
+
+def _reduced_grid(category):
+    """Decorator: take every k-th grid point of X, Y, Z and of the voxel data
+    (arguments data, r_data, V_data) before drawing, k being the factor of the
+    image category. Keyword reduction=k overrides it (1 keeps the full grid)."""
+    return functools.partial(_reduced_grid_wrap, category)
+
+
+def _reduced_grid_wrap(category, func):
+    signature = inspect.signature(func)
+
+    @functools.wraps(func)
+    def wrapper(*args, reduction=None, **kwargs):
+        k = image_grid_reduction[category] if reduction is None else max(1, int(reduction))
+        bound = signature.bind(*args, **kwargs)
+        a = bound.arguments
+        if k > 1 and all(a.get(n) is not None for n in ("X", "Y", "Z")):
+            s = (slice(None, None, k),) * 3
+            for n in ("X", "Y", "Z"):
+                a[n] = a[n][s]
+            for n in ("data", "r_data", "V_data"):
+                if n in a:
+                    a[n] = _reduce_values(a[n], s)
+        return func(*bound.args, **bound.kwargs)
+    return wrapper
 
 ## No screen
 mlab.options.offscreen = True
@@ -53,20 +113,24 @@ def _init_scene(elements_3D_coords, atom_pairs, atoms_Z):
     figure = mlab.figure(bgcolor=(1,1,1), fgcolor=(0,0,0))
     figure.scene.disable_render= True
     geom = np.array(elements_3D_coords).reshape((-1,3))/units.A_to_a0
-    conn = atom_pairs
-    atom_nums = atoms_Z
-    ## Draw atoms and bonds
-    for i, atom in enumerate(atom_nums):
-        p, color = geom[i], tuple(float(x)/255.0 for x in tab[atom][3:6])
-        ## Requires >=MayaVi-4.6.0
-        mlab.points3d([p[0]], [p[1]], [p[2]],
-                      figure=figure, mode='sphere', color=color, resolution=15, scale_factor=0.5)
-    for pair in conn:
-        att1 = tab[atom_nums[pair[0]]]
-        p1, p2 = geom[pair[0]], geom[pair[1]]
-        color = tuple(float(x)/255.0 for x in att1[3:6])
-        mlab.quiver3d([p1[0]],         [p1[1]],         [p1[2]], 
-                      [p2[0] - p1[0]], [p2[1] - p1[1]], [p2[2] - p1[2]],
+    atom_nums = np.asarray(atoms_Z)
+    color_of = lambda z: tuple(float(x)/255.0 for x in tab[z][3:6])
+    ## Draw atoms and bonds. Each mlab call builds its own VTK pipeline (~50 ms), so the
+    ## atoms are drawn with one call per element and the half-bonds with one call per
+    ## colour instead of one call per atom/bond (same glyphs, identical images).
+    ## Requires >=MayaVi-4.6.0
+    for z in dict.fromkeys(atom_nums.tolist()):
+        p = geom[atom_nums == z]
+        mlab.points3d(p[:, 0], p[:, 1], p[:, 2],
+                      figure=figure, mode='sphere', color=color_of(z), resolution=15, scale_factor=0.5)
+    ## Each bond (i, j) and (j, i) is a half cylinder from atom i, coloured like atom i
+    half_bonds = {}
+    for i, j in atom_pairs:
+        half_bonds.setdefault(color_of(atom_nums[i]), []).append((i, j))
+    for color, pairs in half_bonds.items():
+        p1 = geom[[i for i, _ in pairs]]
+        d = geom[[j for _, j in pairs]] - p1
+        mlab.quiver3d(p1[:, 0], p1[:, 1], p1[:, 2], d[:, 0], d[:, 1], d[:, 2],
                       figure=figure, mode='cylinder', color=color, resolution=15, scale_factor=0.5)
 
     return figure
@@ -223,7 +287,7 @@ def move_camera_with_pca(coords, figure, r=5.0, perspective_offset=0.05):
     return figure, normal
 
 ## Visualize
-def topoWithPCA(elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=(width,height)):
+def topoWithPCA(elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=None):
     u"""Creates the topological view of the molecule.
 
     ** Parameters **
@@ -245,10 +309,11 @@ def topoWithPCA(elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=(w
         P_label = P + label_offset  # offset in camera direction
         mlab.text3d(*P_label, label + str(i + 1), color=(0, 0, 0), scale=0.2, figure=figure)
     if file_name is not None:
-        mlab.savefig("{}-TOPOLOGY.png".format(file_name), figure=figure, size=size)    
+        mlab.savefig("{}-TOPOLOGY.png".format(file_name), figure=figure, size=_size(size))    
     mlab.close()
 
-def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=(width,height), positive_color=None, negative_color=None):
+@_reduced_grid("smooth")
+def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=None, positive_color=None, negative_color=None):
     u"""Visualizes the molecular orbitals of the molecule.
 
     ** Parameters **
@@ -287,15 +352,16 @@ def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=Non
         MOn = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoffn ], color=negative_color or colors["NEG"], opacity=surf_opacity)
         if file_name is not None:
             figure = _set_cam(figure, "cam1")
-            mlab.savefig("{}-MO-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+            mlab.savefig("{}-MO-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
             figure = _set_cam(figure, "cam2")
-            mlab.savefig("{}-MO-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+            mlab.savefig("{}-MO-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
         MO_data.remove()
         MOp.remove()
         MOn.remove()
     mlab.close()
 
-def viz_EDD(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=None, labels=None, size=(width,height)):
+@_reduced_grid("sensitive")
+def viz_EDD(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=None, labels=None, size=None):
     u"""Visualizes the electron density differences for the transitions of the molecule.
 
     ** Parameters **
@@ -322,26 +388,27 @@ def viz_EDD(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file
         if file_name is not None:
             if 'Singlet' in et_sym:
                 figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-EDD-S{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-EDD-S{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
                 figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-EDD-S{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-EDD-S{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
             elif 'Triplet' in et_sym:
                 figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-EDD-T{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-EDD-T{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
                 figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-EDD-T{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-EDD-T{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
             else:
                 figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-EDD-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-EDD-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
                 figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-EDD-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-EDD-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
         D_data.remove()
         Dp.remove()
         Dn.remove()
 
     mlab.close()
 
-def viz_Oif(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=None, labels=None, size=(width,height)):
+@_reduced_grid("sensitive")
+def viz_Oif(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=None, labels=None, size=None):
     u"""Visualizes the overlap between the initial and final wavefunctions for the transitions of the molecule.
 
     ** Parameters **
@@ -372,25 +439,25 @@ def viz_Oif(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file
         if file_name is not None:
             if 'Singlet' in et_sym:
                 figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-Oif-S{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-Oif-S{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
                 figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-Oif-S{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-Oif-S{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
             elif 'Triplet' in et_sym:
                 figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-Oif-T{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-Oif-T{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
                 figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-Oif-T{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-Oif-T{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
             else:
                 figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-Oif-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-Oif-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
                 figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-Oif-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                mlab.savefig("{}-Oif-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
         O_data.remove()
         Op.remove()
         On.remove()
     mlab.close()
 
-def viz_dip(data, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=None, labels=None, size=(width,height)):
+def viz_dip(data, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=None, labels=None, size=None):
     u"""Visualizes the electric transition dipole moment.
 
     ** Parameters **
@@ -415,25 +482,26 @@ def viz_dip(data, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=Non
     if file_name is not None:
         if 'Singlet' in et_sym:
             figure = _set_cam(figure, "cam1")
-            mlab.savefig("{}-DIP-S{}.png".format(file_name, labels[0]), figure=figure, size=size)
+            mlab.savefig("{}-DIP-S{}.png".format(file_name, labels[0]), figure=figure, size=_size(size))
             figure = _set_cam(figure, "cam2")
-            mlab.savefig("{}-DIP-S{}_cam2.png".format(file_name, labels[0]), figure=figure, size=size)
+            mlab.savefig("{}-DIP-S{}_cam2.png".format(file_name, labels[0]), figure=figure, size=_size(size))
         elif 'Triplet' in et_sym:
             figure = _set_cam(figure, "cam1")
-            mlab.savefig("{}-DIP-T{}.png".format(file_name, labels[0]), figure=figure, size=size)
+            mlab.savefig("{}-DIP-T{}.png".format(file_name, labels[0]), figure=figure, size=_size(size))
             figure = _set_cam(figure, "cam2")
-            mlab.savefig("{}-DIP-T{}_cam2.png".format(file_name, labels[0]), figure=figure, size=size)
+            mlab.savefig("{}-DIP-T{}_cam2.png".format(file_name, labels[0]), figure=figure, size=_size(size))
         else:
             figure = _set_cam(figure, "cam1")
-            mlab.savefig("{}-DIP-{}.png".format(file_name, labels[0]), figure=figure, size=size)
+            mlab.savefig("{}-DIP-{}.png".format(file_name, labels[0]), figure=figure, size=_size(size))
             figure = _set_cam(figure, "cam2")
-            mlab.savefig("{}-DIP-{}_cam2.png".format(file_name, labels[0]), figure=figure, size=size)
+            mlab.savefig("{}-DIP-{}_cam2.png".format(file_name, labels[0]), figure=figure, size=_size(size))
 
     mlab.clf(figure=figure)
             
     mlab.close()
         
-def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=(width,height)):
+@_reduced_grid("smooth")
+def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=None):
     u"""Visualizes the electrostatic potential difference of the molecule.
 
     ** Parameters **
@@ -509,9 +577,9 @@ def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms
     surf.module_manager.scalar_lut_manager.lut.table = turbo_lut
     if file_name is not None:
         figure = _set_cam(figure, "cam1")
-        mlab.savefig("{}-MEP.png".format(file_name), figure=figure, size=size)
+        mlab.savefig("{}-MEP.png".format(file_name), figure=figure, size=_size(size))
         figure = _set_cam(figure, "cam2")
-        mlab.savefig("{}-MEP_cam2.png".format(file_name), figure=figure, size=size)
+        mlab.savefig("{}-MEP_cam2.png".format(file_name), figure=figure, size=_size(size))
 
     # Case with a fixed scale
     figure_fixed = _init_scene(elements_3D_coords, atom_pairs, atoms_Z) 
@@ -534,11 +602,12 @@ def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms
     surf.module_manager.scalar_lut_manager.lut.table = turbo_lut
     if file_name is not None:
         figure_fixed = _set_cam(figure_fixed, "cam1")
-        mlab.savefig("{}-MEP_fixed.png".format(file_name), figure=figure_fixed, size=size)
+        mlab.savefig("{}-MEP_fixed.png".format(file_name), figure=figure_fixed, size=_size(size))
         figure_fixed = _set_cam(figure_fixed, "cam2")
-        mlab.savefig("{}-MEP_fixed_cam2.png".format(file_name), figure=figure_fixed, size=size)
+        mlab.savefig("{}-MEP_fixed_cam2.png".format(file_name), figure=figure_fixed, size=_size(size))
 
-def viz_Fukui(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=(width,height)):
+@_reduced_grid("sensitive")
+def viz_Fukui(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=None):
     u"""Visualizes the fukui density differences for the molecule.
 
     ** Parameters **
@@ -568,14 +637,15 @@ def viz_Fukui(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=
     
     if file_name is not None:
         figure = _set_cam(figure, "cam1")
-        mlab.savefig("{}-fukui-{}.png".format(file_name, labels), figure=figure, size=size)
+        mlab.savefig("{}-fukui-{}.png".format(file_name, labels), figure=figure, size=_size(size))
         figure = _set_cam(figure, "cam2")
-        mlab.savefig("{}-fukui-{}_cam2.png".format(file_name, labels), figure=figure, size=size)
+        mlab.savefig("{}-fukui-{}_cam2.png".format(file_name, labels), figure=figure, size=_size(size))
     Fp.remove()
     Fn.remove()
 
 
-def viz_Fdual(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=(width,height)):
+@_reduced_grid("sensitive")
+def viz_Fdual(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=None):
     u"""Visualizes the fukui density differences for the molecule.
 
     ** Parameters **
@@ -604,9 +674,9 @@ def viz_Fdual(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=
 
     if file_name is not None:
         figure = _set_cam(figure, "cam1")
-        mlab.savefig("{}-Fdual.png".format(file_name), figure=figure, size=size)
+        mlab.savefig("{}-Fdual.png".format(file_name), figure=figure, size=_size(size))
         figure = _set_cam(figure, "cam2")
-        mlab.savefig("{}-Fdual_cam2.png".format(file_name), figure=figure, size=size)
+        mlab.savefig("{}-Fdual_cam2.png".format(file_name), figure=figure, size=_size(size))
         # np.save("{}-Fdual.npy".format(file_name), data)
     Fp.remove()
     Fn.remove()

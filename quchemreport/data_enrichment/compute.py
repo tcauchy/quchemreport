@@ -20,6 +20,8 @@ from quchemreport.utility_services.log_data import LogData
 from quchemreport.utility_services.validated_data import ValidatedData
 from quchemreport.utility_services.parameters import FWHM, obk_step
 
+# Number of processes/threads for the grid computations; replaced by
+# config.resources.nproc (when given) at the start of compute_data.
 nproc = 20
 
 
@@ -1153,6 +1155,10 @@ def compute_optimized_excited_states(computed_data: ComputedData, list_data_mode
 
 
 def compute_data(list_data_models: List[LogData], validated_data: ValidatedData, config: Config, compute_flags: ComputeFlags, step = obk_step):
+    global nproc
+    if config.resources.nproc is not None:
+        nproc = config.resources.nproc
+    print(f"Grid computations with nproc = {nproc}" + (" (resources.nproc)" if config.resources.nproc else " (default)"))
     
     # Init the ComputedData object
     len_logfiles = len(list_data_models)

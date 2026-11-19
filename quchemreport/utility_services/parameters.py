@@ -18,8 +18,9 @@ FWHM = 3000 # 3000 cm-1 for full width at half maximum of gaussian band.
 
 ## Mayavi parameters
 # Set image size in pixels
-img_width = 2400
-img_height = 2400
+# Default side of the 3D images; overridden by output.image_size in the YAML
+img_width = 1200
+img_height = 1200
 # In mayavi the elevation is the theta angle from the z axis (physics convention) in spherical coordinates. 
 # The azimuth is the phi angle on the x-y plane. 
 # By default the elevation is set to 55° and azimuth to around 55°

@@ -144,8 +144,10 @@ class NTOInclude(BaseModel):
     enabled: bool = False
     max_pairs: int = Field(default=2, ge=1, le=20)
     min_weight: float = Field(default=0.01, ge=0, le=1)
-    grid_step: float = Field(default=0.075, gt=0)
-    nproc: int = Field(default=1, ge=1)
+    # Deprecated, ignored: the NTO images use the common grid (with
+    # output.image_grid_reduction) and resources.nproc.
+    grid_step: Optional[float] = Field(default=None, gt=0)
+    nproc: Optional[int] = Field(default=None, ge=1)
 
 
 class ExcitedStatesInclude(BaseModel):
@@ -205,6 +207,15 @@ class Output(BaseModel):
     format: str # html | markdown | pdf # TODO : Output formats are subject to changes
     verbosity: str # full | si | text
     include: OutputInclude
+    # Side of the (square) 3D images in pixels: 1200 px = 360 dpi in an 8.5 cm column,
+    # 2000 px = 600 dpi. Larger images cost more rendering time.
+    image_size: int = Field(default=1200, ge=200, le=8000)
+    # The 3D images are drawn on every k-th point of the computation grid (k = 2:
+    # 0.075 -> 0.15 bohr). Numerical results (MEP, Fukui, CT indices) keep the full grid.
+    # Smooth surfaces: MO, MEP, NTO.
+    image_grid_reduction: int = Field(default=2, ge=1, le=10)
+    # Sensitive surfaces (density differences): EDD, Oif, Fukui, Fdual.
+    image_grid_reduction_sensitive: int = Field(default=1, ge=1, le=10)
 
     @field_validator("format")
     def validate_format(cls, v: str) -> str:
@@ -259,12 +270,21 @@ class LoggingSettings(BaseModel):
             raise ValueError(f"Logging level must be one of: {allowed}. Not '{v}' .")
         return v
 
+class Resources(BaseModel):
+    # Processes (orbkit) or threads (qmckl) for the grid computations.
+    # None keeps the former default of 20.
+    nproc: Optional[int] = Field(default=None, ge=1)
+    memory: Optional[float] = None          # not used yet
+    mayavi_headless: bool = True            # not used yet (offscreen rendering is always on)
+
+
 class Config(BaseModel):
     common_solver: str
     logfiles: List[LogFile]
     quality_control: QualityControl
     output: Output
     logging: LoggingSettings
+    resources: Resources = Field(default_factory=Resources)
     # camera_view: CameraView
 
     @field_validator("common_solver", mode="before")

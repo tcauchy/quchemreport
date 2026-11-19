@@ -54,6 +54,19 @@ output:
 
   # verbosity : full | si | text
   verbosity: full 
+
+  # Side of the square 3D images (MO, MEP, EDD, Fukui, NTO...) in pixels. Default 1200.
+  # 1200 px = 360 dpi in an 8.5 cm journal column (reports, slides);
+  # 2000 px = 600 dpi (publication figures). Larger images take longer to render.
+  image_size: 1200
+
+  # The 3D images are drawn on every k-th point of the computation grid (0.075 bohr):
+  # 1 = full grid, 2 = 0.15 bohr (2.5 to 3 times faster to draw), 3 = 0.225 bohr.
+  # The numerical results (MEP, Fukui, charge-transfer indices) always use the full grid.
+  # Smooth surfaces: MO, MEP, NTO.
+  image_grid_reduction: 2
+  # Sensitive surfaces (density differences): EDD, Oif, Fukui, Fdual.
+  image_grid_reduction_sensitive: 1
   
   include:
     molecule:
@@ -128,8 +141,6 @@ output:
         enabled: false
         max_pairs: 2       # maximum displayed pairs per state, across spins
         min_weight: 0.01  # minimum relative weight (0 to 1)
-        grid_step: 0.075  # grid spacing in bohr; increase to reduce memory use
-        nproc: 1          # number of ORBKIT workers for NTO images
       # Selection of the excited state is necessary when enabling
       # the output of the transitions and the electron_density_difference
       selection:
@@ -167,9 +178,8 @@ camera_view:
   preset: z # used only if mode = preset; values: x, y, z
   view_file: null # used only if mode = manual; path to a saved .json
 
-# ⚠️ Warning : Ressource monitoring is yet to be implemented
 resources:
-  nproc: 4 # Not enforced yet
+  nproc: 4 # processes (orbkit) or threads (qmckl) for the grid computations; omitted = 20
   memory: 8 # Not enforced yet
   # Use offscreen mode for 3D renderings every times
   mayavi_headless: true

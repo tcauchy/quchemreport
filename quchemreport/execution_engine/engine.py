@@ -15,6 +15,14 @@ from quchemreport.report_generator.generate_report import generate_report
 
 def run(config: Config):
     # Config implicitly validated when the object is created
+    from quchemreport.visualization_engine import visu_mayavi
+    visu_mayavi.set_image_size(config.output.image_size)
+    visu_mayavi.set_image_grid_reduction(config.output.image_grid_reduction,
+                                         config.output.image_grid_reduction_sensitive)
+    nto = config.output.include.excited_states.natural_transition_orbitals
+    if nto.grid_step is not None or nto.nproc is not None:
+        print("Note: natural_transition_orbitals.grid_step / nproc are ignored; the NTO images use "
+              "the common grid with output.image_grid_reduction and resources.nproc.")
 
     tmpdirname = tempfile.mkdtemp()
         

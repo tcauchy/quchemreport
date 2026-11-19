@@ -6,6 +6,7 @@ from quchemreport.data_enrichment.compute_flags import ComputeFlags
 from quchemreport.utility_services.computed_data import ComputedData
 from quchemreport.visualization_engine import visu_mayavi, visu_plots, visu_txt
 from quchemreport.data_enrichment import calc_orb
+from quchemreport.utility_services.parameters import obk_step
 
 
 def generate_molecule_representation(
@@ -630,14 +631,17 @@ def output_nto_images(computed_data: ComputedData, config: Config):
                 prefix = (computed_data.metadata.output_dir +
                           f"img-log{log_idx+1}-NTO-S{state['state']}-pair{pair_idx}")
                 print(f"Generating NTO images: log {log_idx+1}, state {state['state']}, pair {pair_idx}")
-                options = config.output.include.excited_states.natural_transition_orbitals
+                # Common grid, every k-th point (smooth images, like the MOs), evaluated directly
                 data, x, y, z = calc_orb.nto_pair(ref, pair["hole"], pair["electron"],
-                                                  grid_step=options.grid_step, nproc=options.nproc)
+                                                  grid_step=obk_step,
+                                                  nproc=config.resources.nproc or 20,
+                                                  reduction=config.output.image_grid_reduction)
                 visu_mayavi.viz_MO(data, x, y, z, ref.results.geometry.elements_3D_coords,
                                    ref.molecule.connectivity.atom_pairs, ref.molecule.atoms_Z,
                                    file_name=prefix, labels=["hole", "electron"],
                                    positive_color=(0.05, 0.53, 0.18),
-                                   negative_color=(0.95, 0.65, 0.05))
+                                   negative_color=(0.95, 0.65, 0.05),
+                                   reduction=1)  # already reduced by nto_pair
 
 
 def generate_visualization(computed_data: ComputedData, config: Config, compute_flags: ComputeFlags):
