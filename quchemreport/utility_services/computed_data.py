@@ -206,6 +206,8 @@ class ReactivityDerivedData:
 
 @dataclass
 class ExcitedStatesDerivedData:
+    nto_pairs: List[Optional[Any]]
+    nto_reference: Optional[Any]
     Tozer_lambda: List[Optional[List[float]]]
     d_ct: List[Optional[List[float]]]
     q_ct: List[Optional[List[float]]]

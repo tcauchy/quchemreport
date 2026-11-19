@@ -39,6 +39,31 @@ git clone https://github.com/BenoitDamota/QuChemReport.git
 
 Project History
 
+Natural transition orbitals (NTO)
+
+Set `output.include.excited_states.natural_transition_orbitals.enabled` to
+`true` in the YAML file to generate hole/electron NTO pairs for the states
+selected by `excited_states.selection`. The example YAML documents the
+maximum pairs per state, minimum relative weight, grid spacing in bohr and
+number of ORBKIT workers. The feature is disabled by default, including for
+older configuration files.
+
+The calculation uses the printed excitation amplitudes X, omits TDDFT
+de-excitation amplitudes Y, and normalizes the squared singular values over
+all available X amplitudes for each state. Open-shell alpha and beta blocks
+are decomposed separately and their weights share the same normalization.
+Missing or truncated coefficients can change both the NTOs and their weights;
+for Gaussian, `IOp(9/40=4)` requests more printed amplitudes. The reference
+log must contain basis and MO coefficients, including all orbitals used by
+the printed transitions. Its canonical orbitals must be the same orbitals,
+in the same order and phases, as those used for the TD calculation. The code
+checks available geometry, spin, basis, method and orbital energies, but these
+checks cannot prove that orbital phases or rotations match. Prefer a TD log
+containing its own basis and MO coefficients when available, or use an
+explicitly shared reference/checkpoint. Incompatible data are skipped with a
+warning. Green and gold in NTO images represent opposite orbital phases;
+absolute phase signs are arbitrary.
+
 Help and Support
 Documentation
 

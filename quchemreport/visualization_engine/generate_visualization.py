@@ -5,6 +5,7 @@ from quchemreport.config.config import Config
 from quchemreport.data_enrichment.compute_flags import ComputeFlags
 from quchemreport.utility_services.computed_data import ComputedData
 from quchemreport.visualization_engine import visu_mayavi, visu_plots, visu_txt
+from quchemreport.data_enrichment import calc_orb
 
 
 def generate_molecule_representation(
@@ -198,7 +199,7 @@ def output_fukui_functions(computed_data: ComputedData):
         delta_rho_SPp = f_plus.rho_voxels
         grid_X_SPp = f_plus.grid_X
         grid_Y_SPp = f_plus.grid_Y
-        grid_Z_SPp = f_plus.grid_X
+        grid_Z_SPp = f_plus.grid_Z
         
         if (
             delta_rho_SPp is not None
@@ -253,7 +254,7 @@ def output_fukui_functions(computed_data: ComputedData):
     f_dual = computed_data.derived.reactivity.fukui_functions.dual
     if f_dual is not None:
         
-        delta_rho_dual = f_dual.grid_X
+        delta_rho_dual = f_dual.rho_voxels
         grid_X_dual = f_dual.grid_X
         grid_Y_dual = f_dual.grid_Y
         grid_Z_dual = f_dual.grid_Z
@@ -619,6 +620,26 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
                 print(f"Generating transition dipole images for selected transition: {emi_state}")
 
 
+def output_nto_images(computed_data: ComputedData, config: Config):
+    ref = computed_data.derived.excited_states.nto_reference
+    if ref is None or config.output.verbosity == "text":
+        return
+    for log_idx, states in enumerate(computed_data.derived.excited_states.nto_pairs):
+        for state in states or []:
+            for pair_idx, pair in enumerate(state["pairs"], 1):
+                prefix = (computed_data.metadata.output_dir +
+                          f"img-log{log_idx+1}-NTO-S{state['state']}-pair{pair_idx}")
+                print(f"Generating NTO images: log {log_idx+1}, state {state['state']}, pair {pair_idx}")
+                options = config.output.include.excited_states.natural_transition_orbitals
+                data, x, y, z = calc_orb.nto_pair(ref, pair["hole"], pair["electron"],
+                                                  grid_step=options.grid_step, nproc=options.nproc)
+                visu_mayavi.viz_MO(data, x, y, z, ref.results.geometry.elements_3D_coords,
+                                   ref.molecule.connectivity.atom_pairs, ref.molecule.atoms_Z,
+                                   file_name=prefix, labels=["hole", "electron"],
+                                   positive_color=(0.05, 0.53, 0.18),
+                                   negative_color=(0.95, 0.65, 0.05))
+
+
 def generate_visualization(computed_data: ComputedData, config: Config, compute_flags: ComputeFlags):
     
     print("\n=================================================================")
@@ -650,6 +671,9 @@ def generate_visualization(computed_data: ComputedData, config: Config, compute_
     # Generate the outputs for the EDD, OIF and DIP of the excited states
     if compute_flags.compute_es_transitions_and_EDD :
         output_es_EDD_OIF_DIP(computed_data)
+
+    if compute_flags.compute_es_nto:
+        output_nto_images(computed_data, config)
     
     # Generate the output for the Absorption and CD spectrum of the optimized excited states
     do_emi = compute_flags.compute_optimized_es_emi_spectrum

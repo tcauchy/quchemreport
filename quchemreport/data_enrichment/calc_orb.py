@@ -118,6 +118,23 @@ def MO(data_model: LogData, MO_list, spin="none", grid_step=obk_step, nproc=4):
     return out, X, Y, Z
 
 
+def nto_pair(data_model: LogData, hole, electron, grid_step=obk_step, nproc=4):
+    """Discretize two NTOs expressed in the reference atomic-orbital basis."""
+    from orbkit.orbitals import MOClass
+
+    qc = json2orbkit.convert_data(data_model, all_mo=True)
+    X, Y, Z = _init_ORB_grid(qc, grid_step=grid_step)
+    coefficients = [np.asarray(hole, dtype=float), np.asarray(electron, dtype=float)]
+    if any(len(c) != data_model.comp_details.general.basis_set_size for c in coefficients):
+        raise ValueError("NTO coefficients do not match the reference basis")
+    qc.mo_spec = MOClass([
+        {"coeffs": coefficients[0], "energy": 0.0, "occ_num": 1.0, "sym": "1.A"},
+        {"coeffs": coefficients[1], "energy": 1.0, "occ_num": 0.0, "sym": "2.A"},
+    ])
+    qc.mo_spec.update()
+    return core.rho_compute(qc, calc_mo=True, numproc=nproc), X, Y, Z
+
+
 
 def _density_difference_MOs(et_transitions):
     u"""Determines the molecular orbitals involved in electron transitions.
@@ -336,6 +353,7 @@ def Potential(data_model: LogData, grid_step=obk_step, nproc=4):
     X, Y, Z = _init_ORB_grid(qc, grid_step=grid_step)
     dx, dy, dz = (X[10,0,0] - X[9,0,0]), (Y[0,10,0] - Y[0,9,0]), (Z[0,0,10] - Z[0,0,9])
     d3r = dx*dy*dz
+    print("test d3r : ", d3r)
     # =======================================================
   
     rho = core.rho_compute(qc, numproc=nproc)

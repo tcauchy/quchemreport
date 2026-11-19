@@ -13,13 +13,14 @@ import psutil
 
 from quchemreport.config.config import Config
 from quchemreport.data_enrichment import TD2UVvis, calc_orb
+from quchemreport.data_enrichment.nto import build_nto_pairs, X_NORM_COMPLETE_THRESHOLD
 from quchemreport.data_enrichment.compute_flags import ComputeFlags, resolve_compute_flags
 from quchemreport.utility_services.computed_data import ComputedData, FukuiData, MODiagramsComputedData, init_computed_data
 from quchemreport.utility_services.log_data import LogData
 from quchemreport.utility_services.validated_data import ValidatedData
 from quchemreport.utility_services.parameters import FWHM, obk_step
 
-nproc = psutil.cpu_count(logical=False)
+nproc = 20
 
 
 
@@ -319,7 +320,7 @@ def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, s
                 spin,
                 MODiagramsComputedData(
                     spin,
-                    MO_labels,
+                    MO_labels[i],
                     discretized_MO_voxels,
                     grid_X,
                     grid_Y,
@@ -342,6 +343,12 @@ def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, s
                 grid_Z
             )
 
+def compute_MEP_worker_direct(ref_data, nproc, step):
+    try:
+        rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = calc_orb.Potential(ref_data, grid_step=step, nproc=nproc)
+        return rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt
+    except MemoryError:
+        return None
 
 def compute_MEP_worker(ref_data, nproc, step, queue):
     try:
@@ -349,6 +356,8 @@ def compute_MEP_worker(ref_data, nproc, step, queue):
         queue.put((rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt))
     except MemoryError:
         queue.put(None)
+
+USE_MULTIPROCESSING = False  # switch global (YAML, CLI, debug)
 
 
 def compute_MEP_maps(computed_data, ref_data, nproc, step):
@@ -360,45 +369,67 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
     
     # We need to calculate the MEP map inside a child process because it may 
     # be killed by the operating system due to excessive memory consumption.
-    queue = mp.Queue()
-    p = mp.Process(target=compute_MEP_worker, args=(ref_data, nproc, step, queue))
-    p.start()
-    p.join(timeout=600)  # limite temps max (optionnel)
-
-    if p.exitcode == 0:
+    if USE_MULTIPROCESSING:
+        queue = mp.Queue()
+        p = mp.Process(target=compute_MEP_worker, args=(ref_data, nproc, step, queue))
+        p.start()
+        
         try:
-            result = queue.get_nowait()
-            if result is None:
-                print("MemoryError caught inside child process when computing the MEP Map")
-                # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
-                # print("Try changing the number of process or the step value")
-                return False
-            rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = result
-        except Exception:
-            print("Failed to get result from child process")
+            # ? on lit d'abord la queue AVANT le join
+            result = queue.get(timeout=600)
+        except Exception as e:
+            print(f"Failed to get result from child process: {e}")
+            p.terminate()
             return
 
-        # Assign results
-        computed_data.derived.wavefunction.MEP_maps.rho_voxels = rho
-        computed_data.derived.wavefunction.MEP_maps.MEP_voxels = MEP
-        computed_data.derived.wavefunction.MEP_maps.grid_X = grid_X
-        computed_data.derived.wavefunction.MEP_maps.grid_Y = grid_Y
-        computed_data.derived.wavefunction.MEP_maps.grid_Z = grid_Z
+        p.join()
+        print("p.join ok")
 
-        return
+        if p.exitcode == 0:
+            try:
+                result = queue.get_nowait()
+                if result is None:
+                    print("MemoryError caught inside child process when computing the MEP Map")
+                    # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
+                    # print("Try changing the number of process or the step value")
+                    return False
+                rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = result
+            except Exception:
+                print("Failed to get result from child process")
+                return
+        elif p.exitcode == -9:
+            print("\nWarning : Child process killed by the operating system (signal 9)")
+            print("Warning : This might be caused by the MEP Map computation exceeding available memory.")
+            # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
+            # print("Try changing the number of process or the step value")
+            return
+        else:
+            print(f"\nWarning : Child process exited with code {p.exitcode}")
+            print("Warning : This might be caused by the MEP Map computation exceeding available memory.")
+            # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
+            # print("Try changing the number of process or the step value")
+            return
 
-    elif p.exitcode == -9:
-        print("\nWarning : Child process killed by the operating system (signal 9)")
-        print("Warning : This might be caused by the MEP Map computation exceeding available memory.")
-        # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
-        # print("Try changing the number of process or the step value")
-        return
     else:
-        print(f"\nWarning : Child process exited with code {p.exitcode}")
-        print("Warning : This might be caused by the MEP Map computation exceeding available memory.")
-        # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
-        # print("Try changing the number of process or the step value")
-        return
+        try:
+            result = compute_MEP_worker_direct(ref_data, nproc, step)
+            if result is None:
+                print("MemoryError (direct mode)")
+                return False
+            rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = result
+        except Exception as e:
+            print(f"Error during MEP computation: {e}")
+            return False
+    
+    # Assign results
+    computed_data.derived.wavefunction.MEP_maps.rho_voxels = rho
+    computed_data.derived.wavefunction.MEP_maps.MEP_voxels = MEP
+    computed_data.derived.wavefunction.MEP_maps.grid_X = grid_X
+    computed_data.derived.wavefunction.MEP_maps.grid_Y = grid_Y
+    computed_data.derived.wavefunction.MEP_maps.grid_Z = grid_Z
+
+    return
+
 
 
 def compute_population_analysis_indices(computed_data: ComputedData):
@@ -601,17 +632,12 @@ def select_excited_states_indices(computed_data: ComputedData, log_idx, selectio
     oscs = computed_data.results.excited_states.et_oscs[log_idx]
     rots = computed_data.results.excited_states.et_rot[log_idx]
     
-    if (
-        et_energies == None
-        or (
-            selection_mode == "dominant_only"
-            and (
-                oscs == None
-                or rots == None
-            )
-        )
-    ): 
+    if et_energies == None:
         return []
+    # A missing criterion (e.g. no rotatory strengths in the log) is ignored
+    # instead of discarding every state.
+    oscs = oscs if isinstance(oscs, (list, tuple)) else []
+    rots = rots if isinstance(rots, (list, tuple)) else []
     
     n_states = len(et_energies)
 
@@ -629,11 +655,16 @@ def select_excited_states_indices(computed_data: ComputedData, log_idx, selectio
                 selected.append(i)
                 continue
 
-            osc_i = oscs[i]
-            if osc_i is not None and osc_i > osc_threshold:
-                selected.append(i)
-                continue
+            osc_i = oscs[i] if i < len(oscs) else None
+            try:
+                if osc_i is not None and float(osc_i) > osc_threshold:
+                    selected.append(i)
+                    continue
+            except (ValueError, TypeError):
+                pass
 
+            if i >= len(rots):
+                continue
             rot_i = rots[i]
             if rot_i == "N/A":
                 selected.append(i)
@@ -829,17 +860,86 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
     print("Computing Excited States Transitions and EDD done")
 
 
+def compute_nto_states(computed_data, log, ref_data, log_idx, config):
+    """Build NTO coefficients only; spatial grids are generated one pair at a time."""
+    name = log.metadata.log_file
+    if ref_data is None or not getattr(ref_data.metadata, "discretizable", False):
+        print(f"Warning: NTO skipped for {name}: reference orbital coefficients and basis are required.")
+        return
+    ref_wf, td_wf = ref_data.results.wavefunction, log.results.wavefunction
+    if not ref_wf.MO_coefs or not ref_wf.homo_indexes:
+        print(f"Warning: NTO skipped for {name}: reference MO coefficients are missing.")
+        return
+    # Rotation, atom order, method, spin and orbital energies must be compatible.
+    try:
+        ref_xyz = np.asarray(ref_data.results.geometry.elements_3D_coords, dtype=float)
+        td_xyz = np.asarray(log.results.geometry.elements_3D_coords, dtype=float)
+        compatible = (ref_data.molecule.atoms_Z == log.molecule.atoms_Z
+                      and ref_data.molecule.charge == log.molecule.charge
+                      and ref_data.molecule.multiplicity == log.molecule.multiplicity
+                      and ref_xyz.shape == td_xyz.shape and ref_xyz.size > 0
+                      and np.allclose(ref_xyz, td_xyz, atol=1e-4, rtol=0))
+        for attr in ("functional", "basis_set_md5"):
+            a, b = getattr(ref_data.comp_details.general, attr), getattr(log.comp_details.general, attr)
+            if a and b and a != b:
+                compatible = False
+        if td_wf.homo_indexes is not None and ref_wf.homo_indexes != td_wf.homo_indexes:
+            compatible = False
+        if ref_wf.MO_energies and td_wf.MO_energies:
+            if len(ref_wf.MO_energies) != len(td_wf.MO_energies):
+                compatible = False
+            else:
+                for a, b in zip(ref_wf.MO_energies, td_wf.MO_energies):
+                    count = min(len(a), len(b))
+                    if count and not np.allclose(a[:count], b[:count], atol=1e-3, rtol=0):
+                        compatible = False
+    except (TypeError, ValueError):
+        compatible = False
+    if not compatible:
+        print(f"Warning: NTO skipped for {name}: TD and reference orbitals/geometries are incompatible.")
+        return
+    print(f"NTO for {name}: assuming the TD calculation uses the reference canonical orbitals in the same order and phases.")
+    transitions = log.results.excited_states.et_transitions
+    if not transitions:
+        print(f"Warning: NTO skipped for {name}: no excitation amplitudes were parsed.")
+        return
+    # Same state selection as the transitions/EDD so that both sections cover the same states
+    selection = config.output.include.excited_states.selection
+    indices = [i for i in select_excited_states_indices(computed_data, log_idx,
+                                                        selection_mode=selection.mode,
+                                                        n=selection.first_n)
+               if i < len(transitions)]
+    options = config.output.include.excited_states.natural_transition_orbitals
+    states = []
+    for i in indices:
+        try:
+            pairs, norm = build_nto_pairs(transitions[i], ref_wf.MO_coefs, ref_wf.homo_indexes,
+                                          options.max_pairs, options.min_weight)
+            complete = norm >= X_NORM_COMPLETE_THRESHOLD
+            states.append({"state": i + 1, "pairs": pairs, "x_norm": norm,
+                           "n_amplitudes": len(transitions[i]), "complete": complete})
+            if not complete:
+                print(f"Warning: NTO for {name}, state {i + 1}: printed X amplitudes are incomplete "
+                      f"(sum X^2 = {norm:.3f} < {X_NORM_COMPLETE_THRESHOLD}); weights and shapes are approximate.")
+        except (ValueError, IndexError, TypeError) as exc:
+            print(f"Warning: NTO skipped for {name}, state {i + 1}: {exc}")
+    computed_data.derived.excited_states.nto_pairs[log_idx] = states
+    computed_data.derived.excited_states.nto_reference = ref_data
+
+
 def compute_excited_states(computed_data: ComputedData, list_data_models: List[LogData], ref_data: LogData, config: Config, compute_flags: ComputeFlags, step):
     
     do_abso = compute_flags.compute_es_Abso_spectrum
     do_CD = compute_flags.compute_es_CD_spectrum
     do_transitions_and_EDD = compute_flags.compute_es_transitions_and_EDD
+    do_nto = compute_flags.compute_es_nto
     
     # Skip if no output enabled
     if (
         do_abso == False
         and do_CD == False
         and do_transitions_and_EDD == False
+        and do_nto == False
     ):
         return
     
@@ -853,6 +953,9 @@ def compute_excited_states(computed_data: ComputedData, list_data_models: List[L
         
         if 'td' not in jobs:
             continue
+
+        if do_nto:
+            compute_nto_states(computed_data, log, ref_data, log_idx, config)
         
         if (do_abso or do_CD):
             print("\n-----------------------------------------------------------------")

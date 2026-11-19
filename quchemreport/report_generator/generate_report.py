@@ -1552,12 +1552,47 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
     return isContentAdded
 
 
+def render_es_nto(section, output_dir, computed_data, report_type):
+    added = False
+    for log_idx, states in enumerate(computed_data.derived.excited_states.nto_pairs):
+        for state in states or []:
+            if not state["pairs"]:
+                continue
+            added = True
+            section.append(f"Natural transition orbitals, state {state['state']} "
+                           f"(source: {computed_data.metadata.log_files[log_idx]}). "
+                           "Weights are normalized over the printed excitation amplitudes X; "
+                           "de-excitation amplitudes Y are excluded. Missing printed coefficients "
+                           "may affect the results. Reference canonical orbitals must match the TD calculation. ")
+            if "x_norm" in state:
+                section.append(f"{state.get('n_amplitudes', '?')} excitation amplitudes read, "
+                               f"sum of X squared = {state['x_norm']:.3f} "
+                               "(about 1, or slightly above for full TD-DFT, when all amplitudes are printed). ")
+                if not state.get("complete", True):
+                    section.append(bold("Warning: the printed excitation amplitudes are incomplete; "
+                                        "NTO weights and shapes are approximate. Rerun the excited-state "
+                                        "calculation with a lower printing threshold "
+                                        "(Gaussian: IOp(9/40=4); ORCA: TPrint in the %tddft block). "))
+            for pair_idx, pair in enumerate(state["pairs"], 1):
+                caption = (f"NTO state {state['state']}, pair {pair_idx}, {pair['spin']} spin, "
+                           f"weight {100 * pair['weight']:.2f}%. Hole (left), electron (right). "
+                           "Green and gold show opposite orbital phases; their absolute signs are arbitrary.")
+                prefix = f"img-log{log_idx+1}-NTO-S{state['state']}-pair{pair_idx}"
+                hole, electron = prefix + "-MO-hole.png", prefix + "-MO-electron.png"
+                if report_type != "text" and os.path.isfile(output_dir + hole) and os.path.isfile(output_dir + electron):
+                    figure_two_col(section, hole, electron, caption=caption)
+                else:
+                    section.append(caption)
+    return added
+
+
 def fill_excited_states_section(doc, output_dir, computed_data: ComputedData, report_type, config_output: OutputInclude):
     section = Section('EXCITED STATES')
 
     added_es_transition = False
     added_es_abso_and_cd = False
     added_es_EDD = False
+    added_es_nto = False
     
     # Render excited states transition for each available TD logfile
     if config_output.excited_states.transitions:
@@ -1573,11 +1608,15 @@ def fill_excited_states_section(doc, output_dir, computed_data: ComputedData, re
     # Render excited states EDD for each available TD logfile
     if config_output.excited_states.electron_density_difference:
         added_es_EDD = render_es_EDD(section, output_dir, computed_data, report_type)
+
+    if config_output.excited_states.natural_transition_orbitals.enabled:
+        added_es_nto = render_es_nto(section, output_dir, computed_data, report_type)
     
     if (
         added_es_transition
         or added_es_abso_and_cd
         or added_es_EDD
+        or added_es_nto
     ):
         doc.append(section)
 

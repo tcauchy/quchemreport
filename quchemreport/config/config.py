@@ -140,12 +140,21 @@ class ExcitedStatesSelection(BaseModel):
         return self
 
 
+class NTOInclude(BaseModel):
+    enabled: bool = False
+    max_pairs: int = Field(default=2, ge=1, le=20)
+    min_weight: float = Field(default=0.01, ge=0, le=1)
+    grid_step: float = Field(default=0.075, gt=0)
+    nproc: int = Field(default=1, ge=1)
+
+
 class ExcitedStatesInclude(BaseModel):
     selection: ExcitedStatesSelection
     transitions: bool
     absorption_spectrum: bool
     CD_spectrum: bool
     electron_density_difference: bool
+    natural_transition_orbitals: NTOInclude = Field(default_factory=NTOInclude)
     
     @model_validator(mode="after")
     def selection_required_if_transitions_or_edd(cls, values):

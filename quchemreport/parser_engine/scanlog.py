@@ -603,6 +603,21 @@ def process_logfile(config: Config, logfile, logfile_idx, log_storage_path="", v
     log_files = split_logfile(
         logfile, solver, log_storage_path=log_storage_path, verbose=verbose
     )
+    if not log_files:
+        termination_markers = {
+            "gaussian": "Normal termination",
+            "orca": "Timings for individual modules:",
+            "gamess": "TERMINATED NORMALLY",
+        }
+        marker = termination_markers.get(solver)
+        if marker:
+            raise ScanlogException(
+                f"No completed {solver} calculation found in '{logfile}': "
+                f"the termination marker '{marker}' is missing. "
+                "The calculation may have been interrupted or the output file may be incomplete; "
+                "check the end of the log and the calculation status."
+            )
+        raise ScanlogException(f"No completed calculation found in '{logfile}'.")
     data_list = []
     
     for log in log_files:

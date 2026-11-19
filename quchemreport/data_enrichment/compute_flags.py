@@ -14,6 +14,7 @@ class ComputeFlags:
     compute_es_Abso_spectrum: bool = True
     compute_es_CD_spectrum: bool = True
     compute_es_transitions_and_EDD: bool = True
+    compute_es_nto: bool = True
     compute_optimized_es_emi_spectrum: bool = True
     compute_optimized_es_CPL_spectrum: bool = True
     compute_optimized_es_transitions_and_EDD: bool = True
@@ -41,6 +42,7 @@ COMPUTE_FLAG_RULES = {
         "excited_states.transitions",
         "excited_states.electron_density_difference"
     ],
+    "compute_es_nto": ["excited_states.natural_transition_orbitals.enabled"],
     "compute_optimized_es_emi_spectrum": ["optimized_excited_states.emission_spectrum"],
     "compute_optimized_es_CPL_spectrum": ["optimized_excited_states.CPL_spectrum"],
     "compute_optimized_es_transitions_and_EDD": [

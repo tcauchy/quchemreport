@@ -135,17 +135,32 @@ def get_pca_camera_auto(coords, fov_deg=25, margin=1.2, perspective_offset_ratio
     center = np.mean(coords, axis=0)
     coords_centered = coords - center
     
-    # PCA analysis
-    pca = PCA(n_components=3)
-    pca.fit(coords_centered)
-    
-    # Get normal vector (viewing direction)
-    normal = pca.components_[-1]  # Last component gives the normal to the main plane
-    
-    # Get the two main axes in the plane
-    x_axis = pca.components_[0]
-    y_axis = pca.components_[1]
+    if coords_centered.shape[0] < 3:
+        x_axis = np.array([1.0, 0.0, 0.0])
+        y_axis = np.array([0.0, 1.0, 0.0])
+        normal = np.array([0.0, 0.0, 1.0])
+        if len(coords_centered) == 2:
+            bond = coords[1] - coords[0]
+            length = np.linalg.norm(bond)
+            if length > 0:
+                x_axis = bond / length
+                helper = np.eye(3)[np.argmin(np.abs(x_axis))]
+                normal = np.cross(x_axis, helper)
+                normal /= np.linalg.norm(normal)
+                y_axis = np.cross(normal, x_axis)
 
+    else:    
+        # PCA analysis
+        pca = PCA(n_components=3)
+        pca.fit(coords_centered)
+        
+        # Get normal vector (viewing direction)
+        normal = pca.components_[-1]  # Last component gives the normal to the main plane
+        
+        # Get the two main axes in the plane
+        x_axis = pca.components_[0]
+        y_axis = pca.components_[1]
+    
     # Calculate molecule extent
     max_dimension = get_molecule_bounds(coords)
   
@@ -233,7 +248,7 @@ def topoWithPCA(elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=(w
         mlab.savefig("{}-TOPOLOGY.png".format(file_name), figure=figure, size=size)    
     mlab.close()
 
-def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=(width,height)):
+def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=(width,height), positive_color=None, negative_color=None):
     u"""Visualizes the molecular orbitals of the molecule.
 
     ** Parameters **
@@ -268,8 +283,8 @@ def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=Non
         Cutoffp, Cutoffn = CalcCutOff(series,IsoContourPercent=20) 
         #print(Cutoffp, Cutoffn)
         MO_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)        
-        MOp = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoffp ], color=colors["OM"], opacity=surf_opacity)
-        MOn = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoffn ], color=colors["NEG"], opacity=surf_opacity)
+        MOp = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoffp ], color=positive_color or colors["OM"], opacity=surf_opacity)
+        MOn = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoffn ], color=negative_color or colors["NEG"], opacity=surf_opacity)
         if file_name is not None:
             figure = _set_cam(figure, "cam1")
             mlab.savefig("{}-MO-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
@@ -466,7 +481,7 @@ def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms
     
     turbo_with_alpha = np.zeros((256, 4))
     turbo_with_alpha[:, :3] = turbo_lut
-    turbo_with_alpha[:, -1] = 0.85 # hard coded opacity for potential
+    turbo_with_alpha[:, -1] = 0.95 # hard coded opacity for potential
 
     # Case with relative scale
     figure = _init_scene(elements_3D_coords, atom_pairs, atoms_Z) 
@@ -484,7 +499,7 @@ def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms
     cont.filter.contours=[0.002]
     ## Select potential
     cont_V = mlab.pipeline.set_active_attribute(cont, figure=figure, point_scalars="potential")
-    surf = mlab.pipeline.surface(cont_V, figure=figure, opacity=0.85)
+    surf = mlab.pipeline.surface(cont_V, figure=figure, opacity=0.95)
     vtk_data = surf.mlab_source.dataset
     scalar_data = vtk_data.point_data.scalars
     min_val = np.min(scalar_data)
@@ -515,7 +530,7 @@ def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms
     ## Select potential
     cont_V_fixed = mlab.pipeline.set_active_attribute(cont_fixed, figure=figure_fixed, point_scalars="potential")
     # Jet color map is not really centred on the green. There is a bit too much blue. So vmin is set lower (jet blue = negative values)
-    surf = mlab.pipeline.surface(cont_V_fixed, figure=figure_fixed, opacity=0.85, vmin=-0.01, vmax=+0.01)
+    surf = mlab.pipeline.surface(cont_V_fixed, figure=figure_fixed, opacity=0.95, vmin=-0.01, vmax=+0.01)
     surf.module_manager.scalar_lut_manager.lut.table = turbo_lut
     if file_name is not None:
         figure_fixed = _set_cam(figure_fixed, "cam1")

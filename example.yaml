@@ -122,6 +122,14 @@ output:
       fukui_functions: false
 
     excited_states:
+      # Natural transition orbitals, computed from printed excitation amplitudes.
+      # For Gaussian, use IOp(9/40=4) in the TD calculation to print more coefficients.
+      natural_transition_orbitals:
+        enabled: false
+        max_pairs: 2       # maximum displayed pairs per state, across spins
+        min_weight: 0.01  # minimum relative weight (0 to 1)
+        grid_step: 0.075  # grid spacing in bohr; increase to reduce memory use
+        nproc: 1          # number of ORBKIT workers for NTO images
       # Selection of the excited state is necessary when enabling
       # the output of the transitions and the electron_density_difference
       selection:
