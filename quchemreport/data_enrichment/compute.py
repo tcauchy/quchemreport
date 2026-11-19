@@ -91,9 +91,11 @@ def compute_MO_labels_and_indexes(log_data: LogData, config: Config, log_file):
             w = True
         if acronym == "lumo" and offset < 0:
             w = True
-        if HO_ind[0] + offset < 0 or HO_ind[0] + offset > max_MO_index:
+        # same index as below: lumo+n is homo + n + 1
+        shift = offset + (1 if acronym == "lumo" else 0)
+        if HO_ind[0] + shift < 0 or HO_ind[0] + shift > max_MO_index:
             w = True
-        if len(HO_ind) == 2 and (HO_ind[1] + offset < 0 or HO_ind[1] + offset > max_MO_index):
+        if len(HO_ind) == 2 and (HO_ind[1] + shift < 0 or HO_ind[1] + shift > max_MO_index):
             w = True
             
         if w == True:
@@ -140,6 +142,8 @@ def compute_MO_labels_and_indexes(log_data: LogData, config: Config, log_file):
 
 
 def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, computed_data: ComputedData):
+    """ref_data is the reference log (YAML 'reference: true'), not necessarily
+    the one used for the grids (which may be absent)."""
     
     # Extract simple data from the reference logfile
     computed_data.molecule.monoisotopic_mass = ref_data.molecule.monoisotopic_mass
@@ -155,6 +159,8 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
     for i,log in enumerate(list_data_models):
         # Extract metadata
         computed_data.metadata.log_files[i] = log.metadata.log_file
+        # Index of the YAML logfile entry (a log file may give several steps/models)
+        computed_data.metadata.config_indexes[i] = log.metadata.config_idx
         
         # Extract Molecule Data
         computed_data.molecule.charges[i] = log.molecule.charge
@@ -188,7 +194,8 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
         computed_data.results.geometry.elements_3D_coords[i] = log.results.geometry.elements_3D_coords
         computed_data.results.geometry.geometric_values[i] = log.results.geometry.geometric_values
         computed_data.results.geometry.nuclear_repulsion_energy_from_xyz[i] = log.results.geometry.nuclear_repulsion_energy_from_xyz
-        
+        computed_data.results.geometry.OPT_DONE[i] = log.results.geometry.OPT_DONE
+
         # Extract Frequency Results
         computed_data.results.freq.vibrational_int[i] = log.results.freq.vibrational_int
         computed_data.results.freq.vibrational_freq[i] = log.results.freq.vibrational_freq
@@ -291,6 +298,9 @@ def compute_all_MO_labels_and_indexes(computed_data: ComputedData, list_data_mod
 
 
 def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, step):
+    if ref_data is None:
+        print("Warning: MO diagrams skipped: no log file with MO coefficients for the reference.")
+        return
     ref_id = computed_data.metadata.ref_log_file_idx
     HO_ind = ref_data.results.wavefunction.homo_indexes
     MO_indexes = computed_data.derived.wavefunction.MO_analysis.MO_indexes[ref_id]
@@ -368,6 +378,10 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
     print(" Compute : Computing MEP Maps")
     print("=================================================================")
     
+    if ref_data is None:
+        print("Warning: MEP map skipped: no log file with MO coefficients for the reference.")
+        return None
+    
     
     # We need to calculate the MEP map inside a child process because it may 
     # be killed by the operating system due to excessive memory consumption.
@@ -382,7 +396,7 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
         except Exception as e:
             print(f"Failed to get result from child process: {e}")
             p.terminate()
-            return
+            return None
 
         p.join()
         print("p.join ok")
@@ -394,34 +408,34 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
                     print("MemoryError caught inside child process when computing the MEP Map")
                     # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
                     # print("Try changing the number of process or the step value")
-                    return False
+                    return None
                 rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = result
             except Exception:
                 print("Failed to get result from child process")
-                return
+                return None
         elif p.exitcode == -9:
             print("\nWarning : Child process killed by the operating system (signal 9)")
             print("Warning : This might be caused by the MEP Map computation exceeding available memory.")
             # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
             # print("Try changing the number of process or the step value")
-            return
+            return None
         else:
             print(f"\nWarning : Child process exited with code {p.exitcode}")
             print("Warning : This might be caused by the MEP Map computation exceeding available memory.")
             # TODO : TO IMPLEMENT : implement the gestion of process and step via the YAML
             # print("Try changing the number of process or the step value")
-            return
+            return None
 
     else:
         try:
             result = compute_MEP_worker_direct(ref_data, nproc, step)
             if result is None:
                 print("MemoryError (direct mode)")
-                return False
+                return None
             rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = result
         except Exception as e:
             print(f"Error during MEP computation: {e}")
-            return False
+            return None
     
     # Assign results
     computed_data.derived.wavefunction.MEP_maps.rho_voxels = rho
@@ -430,7 +444,8 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
     computed_data.derived.wavefunction.MEP_maps.grid_Y = grid_Y
     computed_data.derived.wavefunction.MEP_maps.grid_Z = grid_Z
 
-    return
+    # Raw (non-renormalized) reference density, reused by the Fukui functions
+    return precomputed_rho_opt
 
 
 
@@ -507,7 +522,10 @@ def compute_fukui_functions(computed_data: ComputedData, ref_data: LogData, log_
     print("=================================================================")
     
     if ref_data is None:
+        print("Warning: Fukui functions skipped: no log file with MO coefficients for the reference.")
         return
+    
+    precomp_rho_opt = precomputed_rho_opt
     
     # Fukui dicretization for SP Plus if available
     if log_SP_plus is not None:
@@ -521,7 +539,7 @@ def compute_fukui_functions(computed_data: ComputedData, ref_data: LogData, log_
             label=None,
             grid_step=step,
             nproc=nproc,
-            precomputed_rho_opt=precomputed_rho_opt
+            precomputed_rho_opt=precomp_rho_opt
         )
         computed_data.derived.reactivity.fukui_functions.SP_plus = FukuiData(
             rho_voxels_SPp,
@@ -600,22 +618,23 @@ def compute_reactivity(computed_data: ComputedData, validated_data: ValidatedDat
     # Get the logfiles for the SP Plus and Minus if they were found
     log_SP_plus: LogData = None
     if (
-        SPp_index > 0
+        SPp_index >= 0
         and SPp_index < len(list_data_models)
     ):
         log_SP_plus = list_data_models[SPp_index]
     
     log_SP_minus: LogData = None
     if (
-        SPm_index > 0
+        SPm_index >= 0
         and SPm_index < len(list_data_models)
     ):
         log_SP_minus = list_data_models[SPm_index]
     
     
-    # Compute CDFT global indices
+    # Compute CDFT global indices (energies and charges of the reference log itself)
     if compute_flags.compute_CDFT_global_indices:
-        compute_CDFT_global_indices(computed_data, ref_data, log_SP_plus, log_SP_minus)
+        ref_log = list_data_models[validated_data.ref_log_file_idx]
+        compute_CDFT_global_indices(computed_data, ref_log, log_SP_plus, log_SP_minus)
 
     # Compute Fukui Functions
     if compute_flags.compute_fukui_functions:
@@ -734,7 +753,7 @@ def compute_es_Abso_and_CD_spectrum(computed_data: ComputedData, log_idx, do_abs
     
     if (
         len(et_rotats) == 0 
-        and et_rotats.count(0.0) == len(et_rotats)
+        or et_rotats.count(0.0) == len(et_rotats)
     ):
         print("The rotational strengths are always 0.0. The circular dichroism spectrum won't be plotted.")
         return
@@ -763,12 +782,19 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
         et_energies is None
         or et_oscs is None
         or et_sym is None
-        or moments is None
-        # or et_magdips_raw is None # magdips not used for now
-        or et_eldips_raw is None
-        # or et_veldips_raw is None # veldips not used for now
     ):
         return
+
+    if ref_data is None:
+        print("Warning: transitions and EDD skipped: no log file with MO coefficients for the reference.")
+        return
+
+    # The dipoles only give arrows of the (optional) dipole pictures: their absence
+    # (e.g. cclib reads no transition dipoles from ORCA) must not stop the EDD.
+    if et_eldips_raw is None:
+        print("Note: no electric transition dipoles in the log (e.g. ORCA): no ELDIP arrow.")
+    if moments is None:
+        print("Note: no ground state dipole moment in the log: no GSDIP arrow.")
     
     print("Calculating the electronic density differences.")
     
@@ -805,8 +831,12 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
     computed_data.derived.excited_states.grid_Y[log_idx] = grid_Y
     computed_data.derived.excited_states.grid_Z[log_idx] = grid_Z
     
-    # Dipolar moment of Ground state norm in x, y, z. 
-    gs_eldip = (np.array(moments[1]), np.array(moments[0])) 
+    # Ground state dipole drawn from the origin of the moments: (end, start).
+    # cclib: moments[0] = origin (bohr; 0 for Gaussian, centre of mass for ORCA),
+    # moments[1] = dipole (Debye, drawn with 1 D = 1 bohr).
+    gs_eldip = None
+    if moments is not None and len(moments) > 1:
+        gs_eldip = (np.array(moments[0]) + np.array(moments[1]), np.array(moments[0]))
     
     selection_mode = config.output.include.excited_states.selection.mode
     first_n = config.output.include.excited_states.selection.first_n
@@ -834,6 +864,8 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
             print("Generating transition dipole for selected transition:", k+1),
             ct_dip = TD_output[k][2][3:]
             data_dip = {"GSDIP" : gs_eldip, "OVDIP" : O_dip, "CTDIP" : ct_dip}
+            if gs_eldip is None:
+                del data_dip["GSDIP"]
             
             # In Gaussian Transition dispoles have for origin the center of masses. 
             if et_eldips_raw != None:
@@ -1061,6 +1093,10 @@ def compute_optimized_es_transitions_and_EDD(computed_data: ComputedData, ref_da
 
     emi_transition = et_transitions[emi_index]
     
+    if ref_data is None:
+        print("Warning: emission EDD skipped: no log file with MO coefficients for the reference.")
+        return
+    
     # Calculating Electronic density difference discretization and transition property (Tozer lambda and charge tranfer)
     print("Calculating the emission electronic density difference of optimized excited states.")
     
@@ -1093,6 +1129,9 @@ def compute_optimized_es_transitions_and_EDD(computed_data: ComputedData, ref_da
         ct_dip = TD_output[0][2][3:]
         data_dip = {"CTDIP" : ct_dip}
         computed_data.derived.optimized_excited_states.all_data_dip[log_idx][emi_index] = data_dip
+
+    if TD_output is None:
+        return
 
     # Extract the calculated values of the tozer_lambda, d_CT, Q_CT
     # Using TD_output[0] instead of the index of the transition as TD_output only contain the transition of index emi_index here
@@ -1134,7 +1173,7 @@ def compute_optimized_excited_states(computed_data: ComputedData, list_data_mode
         if not any("_es" in jb for jb in jobs):
             continue
         
-        emi_state = config.logfiles[log_idx].excited_state_number
+        emi_state = config.logfiles[log.metadata.config_idx].excited_state_number
         
         if (do_emi or do_CPL):
             print("\n-----------------------------------------------------------------")
@@ -1150,8 +1189,28 @@ def compute_optimized_excited_states(computed_data: ComputedData, list_data_mode
             print(f" Compute : Computing Optimized Excited States : Transition and EDD")
             print(f" (Source : {log_file})")
             print("-----------------------------------------------------------------")
-            
-            compute_optimized_es_transitions_and_EDD(computed_data, ref_data, emi_state, log_idx, report_type, step, nproc)
+
+            # The excitation amplitudes of this log refer to its own orbitals, at the optimized
+            # excited state geometry: use them when the log has them (pop=full gfprint).
+            orbitals = log if _has_orbitals(log) else ref_data
+            if orbitals is log:
+                print(f"Emission EDD from the orbitals and geometry of {log_file}.")
+            elif ref_data is not None:
+                print(f"Warning: {log_file} has no MO coefficients or basis set (add pop=full gfprint to the "
+                      "excited state optimization): the emission EDD, Lambda, d_CT and q_CT use the orbitals "
+                      f"and geometry of the ground-state reference {ref_data.metadata.log_file} (approximate).")
+            computed_data.derived.optimized_excited_states.orbitals_log_idx[log_idx] = next(
+                (i for i, model in enumerate(list_data_models) if model is orbitals), None)
+
+            compute_optimized_es_transitions_and_EDD(computed_data, orbitals, emi_state, log_idx, report_type, step, nproc)
+
+
+def _has_orbitals(model: LogData):
+    """True when the log has what the grids need: MO coefficients, basis set and AO names."""
+    general = model.comp_details.general
+    mo_coefs = model.results.wavefunction.MO_coefs
+    return (mo_coefs is not None and len(mo_coefs) in (1, 2)
+            and general.basis_set is not None and general.ao_names is not None)
 
 
 def compute_data(list_data_models: List[LogData], validated_data: ValidatedData, config: Config, compute_flags: ComputeFlags, step = obk_step):
@@ -1179,8 +1238,8 @@ def compute_data(list_data_models: List[LogData], validated_data: ValidatedData,
     computed_data.metadata.ref_log_file_idx = validated_data.ref_log_file_idx
     ref_data = validated_data.data_for_discretization
     
-    # Extract and aggregate data from each log file
-    extract_simple_data(list_data_models, ref_data, computed_data)
+    # Extract and aggregate data from each log file (simple data from the reference log)
+    extract_simple_data(list_data_models, list_data_models[validated_data.ref_log_file_idx], computed_data)
     
     # Compute molecule representations
     if compute_flags.compute_molecule_representations:

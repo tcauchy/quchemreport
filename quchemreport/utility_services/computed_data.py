@@ -7,6 +7,8 @@ class Metadata:
     log_files: List[str]
     ref_log_file_idx: int
     output_dir: str
+    # YAML logfiles index of each model (several models per log file for multi-step logs)
+    config_indexes: List[Optional[int]]
 
 
 @dataclass
@@ -71,6 +73,7 @@ class GeometryResults:
     elements_3D_coords: List[Optional[List[float]]]
     geometric_values: List[Optional[List[List[float]]]]
     nuclear_repulsion_energy_from_xyz: List[Optional[float]]
+    OPT_DONE: List[Optional[bool]]
 
 
 @dataclass
@@ -234,6 +237,9 @@ class OptimizedExcitedStatesDerivedData:
     emi_spectrum: List[Optional[Any]]
     CPL_spectrum: List[Optional[Any]]
     xvalues: List[Optional[Any]]
+    # index of the log whose orbitals and geometry gave the emission EDD (the opt_es log
+    # itself when it has MO coefficients, else the ground-state reference)
+    orbitals_log_idx: List[Optional[int]]
 
 @dataclass
 class DerivedData:
@@ -303,3 +309,9 @@ def init_computed_data(n):
         raise ValueError(f"The value n (number of log files) to initialize ComputedData must be at least 1 and not {n}.")
     
     return init_dataclass(ComputedData, n)
+
+
+def config_logfile(config, computed_data, log_idx):
+    """YAML logfile entry of the model log_idx (models and YAML entries differ for multi-step logs)."""
+    idx = computed_data.metadata.config_indexes[log_idx]
+    return config.logfiles[log_idx if idx is None else idx]

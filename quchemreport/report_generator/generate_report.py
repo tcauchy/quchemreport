@@ -9,9 +9,10 @@ from pylatex.package import Package
 from cclib.parser.utils import PeriodicTable
 
 from quchemreport.config.config import Config, OutputInclude
-from quchemreport.utility_services.computed_data import ComputedData
+from quchemreport.utility_services.computed_data import ComputedData, config_logfile
 from quchemreport.utility_services.parameters import THRESHOLD_IR_INTENSITIES
-from quchemreport.utility_services.units import nm_to_wnb
+from quchemreport.utility_services.units import nm_to_wnb, Eh_to_Kcal_mol
+from quchemreport.utility_services.naming import spin_letter
 
 # TODO : NEED TO THINK ABOUT THE MAX VALUE
 MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE = 15
@@ -183,6 +184,30 @@ def render_grouped_values_with_logs(table, label, values, log_files, ref_id, tab
     table.add_row([''] * table_col)
 
 
+def imaginary_frequencies(freqs):
+    """Imaginary frequencies (negative values in cclib), in cm-1."""
+    return [f for f in (freqs or []) if f is not None and f < 0]
+
+
+def format_imaginary(freqs):
+    return ", ".join("%.1fi" % abs(f) for f in freqs)
+
+
+def quality_warnings(computed_data):
+    """Warnings on the nature of the structures: non-converged optimization, imaginary frequencies."""
+    warnings = []
+    log_files = computed_data.metadata.log_files
+    for i, log in enumerate(log_files):
+        if computed_data.results.geometry.OPT_DONE[i] is False:
+            warnings.append(f"{log}: the geometry optimization did not converge "
+                            "(the geometry is not a stationary point).")
+        imag = imaginary_frequencies(computed_data.results.freq.vibrational_freq[i])
+        if imag:
+            warnings.append(f"{log}: {len(imag)} imaginary frequenc{'y' if len(imag) == 1 else 'ies'} "
+                            f"({format_imaginary(imag)} cm-1): the structure is not a minimum.")
+    return warnings
+
+
 def fill_logfiles_details_section(doc, computed_data, config: Config):
     with doc.create(Section('LOGFILES DETAILS')) :
         
@@ -208,12 +233,20 @@ def fill_logfiles_details_section(doc, computed_data, config: Config):
             es_entries = []
             for i, log in enumerate(log_files):
                 if any("_es" in jb for jb in job_types[i]):
-                    es_number = config.logfiles[i].excited_state_number
+                    es_number = config_logfile(config, computed_data, i).excited_state_number
                     if es_number is not None:
                         es_entries.append(f"State {es_number} ({log})")
             if es_entries:
                 log_table.add_row(["", ""])
                 log_table.add_row(['Optimized Excited State', "\n".join(es_entries)])
+
+            # Non-converged optimizations and imaginary frequencies
+            warnings = quality_warnings(computed_data)
+            for warning in warnings:
+                print("WARNING: " + warning)
+            if warnings:
+                log_table.add_row(["", ""])
+                log_table.add_row([bold('Warnings'), bold("\n".join(warnings))])
 
 
 def render_molecule_identification(section, computed_data: ComputedData, designated_name, report_type):
@@ -310,6 +343,12 @@ def render_atomic_coordinates_table(doc, atoms, atoms_Z, log_file: str, table_ti
     doc.append(NoEscape(r'\end{center}'))
     doc.append(NoEscape(r'\end{footnotesize}'))
 
+def coordinates_title(computed_data, log_idx):
+    if computed_data.results.geometry.OPT_DONE[log_idx] is False:
+        return "Table. Last cartesian atomic coordinates in Angstroms (optimization NOT converged)"
+    return "Table. Converged cartesian atomic coordinates in Angstroms"
+
+
 def render_ref_atomic_coordinates(section, computed_data: ComputedData):
     ref_id = computed_data.metadata.ref_log_file_idx
     atoms = computed_data.results.geometry.elements_3D_coords[ref_id]
@@ -334,7 +373,7 @@ def render_ref_atomic_coordinates(section, computed_data: ComputedData):
         atoms=atoms,
         atoms_Z=atoms_Z,
         log_file=log_file,
-        table_title='Table. Converged cartesian atomic coordinates in Angstroms',
+        table_title=coordinates_title(computed_data, ref_id),
     )
     
     return True
@@ -418,12 +457,13 @@ def fill_computational_details_section(doc, computed_data: ComputedData):
             #                             list_data_models[i].comp_details.general.solvent_reaction_field])
     
             # TODO : TO CHECK : Complete the transformation for the output of scfTargers here (only from ref file for now)
-            scfTargets = scf_targets[-1]
-            if software=="gaussian" : # Gaussian or GAUSSIAN (upper/lower?
-                param_table.add_row(["Requested SCF convergence on RMS and Max density matrix", scfTargets[ref_id][0], scfTargets[ref_id][1]  ])
-                param_table.add_row(["Requested SCF convergence on energy", scfTargets[ref_id][2], " "  ])
-            if software=="gamess" :
-                param_table.add_row(["Requested SCF convergence on density", scfTargets[ref_id][0], " "   ])
+            # Targets of the last SCF of the reference log (one row per SCF cycle)
+            scfTargets = scf_targets[ref_id][-1] if scf_targets[ref_id] else None
+            if software=="gaussian" and scfTargets is not None and len(scfTargets) >= 3: # Gaussian or GAUSSIAN (upper/lower?
+                param_table.add_row(["Requested SCF convergence on RMS and Max density matrix", scfTargets[0], scfTargets[1]  ])
+                param_table.add_row(["Requested SCF convergence on energy", scfTargets[2], " "  ])
+            if software=="gamess" and scfTargets is not None:
+                param_table.add_row(["Requested SCF convergence on density", scfTargets[0], " "   ])
             
             
             param_table.add_row([" ", " " , " "])
@@ -550,8 +590,14 @@ def render_energies_table(doc, computed_data: ComputedData, log_indexes):
                     "%.2f eV" % MO_energies[1][idx_beta]
                 ])
         else:
-            wavefunction_table.add_row(['Restricted calculation', 'Spin MO', " "])
-            wavefunction_table.add_row(['HOMO number', homo_ind[0]+1, " "])
+            multiplicity = computed_data.molecule.multiplicity[i_log]
+            if multiplicity is not None and multiplicity > 1:
+                # ROHF/ROKS: one set of orbitals, the HOMO is the highest singly occupied MO
+                wavefunction_table.add_row(['Restricted open-shell calculation', 'Spin MO', " "])
+                wavefunction_table.add_row(['HOMO number (highest singly occupied MO)', homo_ind[0]+1, " "])
+            else:
+                wavefunction_table.add_row(['Restricted calculation', 'Spin MO', " "])
+                wavefunction_table.add_row(['HOMO number', homo_ind[0]+1, " "])
 
             for idx_label, label in enumerate(MO_labels[0]):
                 idx = MO_indexes[0][idx_label]
@@ -691,17 +737,23 @@ def render_ref_MEP_maps(section, output_dir, computed_data: ComputedData, report
     
     ref_id = computed_data.metadata.ref_log_file_idx
     
-    # figure with ESP
-    nomPng = f"img-log{ref_id}-MEP_fixed.png"
-    nomPng2 = f"img-log{ref_id}-MEP_fixed_cam2.png"                                                        
-    if (os.path.isfile(output_dir + nomPng)) :
-        if (os.path.isfile(output_dir + nomPng2)) :
-            figure_two_col(section, nomPng, nomPng2, caption="Representations of the Molecular Electrostatic Potential mapped on the electron density (cutoff value of 0.002 e-/bohr3). On the left, red, blue and green regions correspond to negative values < -0.06 a.u., positive values > 0.08 a.u. and neutral values respectively. On the right, the scale is set automatically to highlight the minimum values in red and the maximum values in blues.")
-            return True
-        elif ( not os.path.isfile(output_dir + nomPng2)) :
-            figure_one_col(section, nomPng, taillePng="10cm", 
-            caption="Representations of the Molecular Electrostatic Potential mapped on the electron density (cutoff value of 0.002 e-/bohr3). On the left, red, blue and green regions correspond to negative values < -0.06 a.u., positive values > 0.08 a.u. and neutral values respectively.")
-            return True
+    # MEP figures: fixed colour scale (comparison between compounds) and automatic scale
+    # (both from visu_mayavi.viz_Potential, first camera)
+    nomFixed = f"img-log{ref_id}-MEP_fixed.png"
+    nomAuto = f"img-log{ref_id}-MEP.png"
+    surface = "Molecular Electrostatic Potential (MEP) mapped on the electron density isosurface (0.002 e-/bohr3). "
+    fixed = ("red regions correspond to MEP values below -0.01 a.u. (electron-rich), blue regions to values "
+             "above +0.01 a.u. (electron-poor) and green regions to values close to zero; this fixed scale "
+             "allows comparisons between compounds.")
+    auto = ("the colour scale is set automatically from the minimum (red) to the maximum (blue) "
+            "of the MEP on the surface.")
+    if os.path.isfile(output_dir + nomFixed):
+        if os.path.isfile(output_dir + nomAuto):
+            figure_two_col(section, nomFixed, nomAuto,
+                           caption=surface + "Left: " + fixed + " Right: same view, " + auto)
+        else:
+            figure_one_col(section, nomFixed, taillePng="10cm", caption=surface + fixed[0].upper() + fixed[1:])
+        return True
 
     return False
 
@@ -902,10 +954,20 @@ def render_thermo_data(section, computed_data: ComputedData):
             thermo_data_table.add_row(["Frequency and Thermochemistry specific results", " " , " "])
             thermo_data_table.add_row([f"Source: {log_file}", " ", " "])
             
+            imag = imaginary_frequencies(computed_data.results.freq.vibrational_freq[i])
+            if imag:
+                thermo_data_table.add_row([bold("Imaginary frequencies (not a minimum)"),
+                                           bold(format_imaginary(imag) + " cm-1"), " "])
+            
             if (len(vibrational_int) != 0) and (rtemper != "N/A") :
                 if zero_point_energy != None:
-                    thermo_data_table.add_row(['Sum of electronic and zero-point energy', 
+                    # cclib gives the zero-point correction; the sum uses the SCF energy of the same log
+                    thermo_data_table.add_row(['Zero-point correction',
                                         "%.5f Hartrees" % zero_point_energy, " "])
+                    scf_energy = computed_data.results.wavefunction.total_molecular_energy[i]
+                    if scf_energy is not None:
+                        thermo_data_table.add_row(['Sum of electronic and zero-point energies',
+                                        "%.5f Hartrees" % (scf_energy + zero_point_energy), " "])
                 if electronic_thermal_energy != None:
                     thermo_data_table.add_row(["Sum of electronic and thermal energies at  %.2f K"  % rtemper, 
                                         "%.5f Hartrees" % electronic_thermal_energy, " "])
@@ -916,8 +978,9 @@ def render_thermo_data(section, computed_data: ComputedData):
                     thermo_data_table.add_row(["Gibbs free energy at %.2f K" % rtemper,
                                         "%.5f Hartrees" % free_energy, " "])
                 if entropy != None :
-                    thermo_data_table.add_row(["Entropy at %.2f K" % rtemper, 
-                                        "%.5f Hartrees" % entropy, " "])
+                    # cclib entropy in hartree/K -> cal/(mol K)
+                    thermo_data_table.add_row(["Entropy at %.2f K" % rtemper,
+                                        NoEscape(r"%.3f cal mol$^{-1}$ K$^{-1}$" % (entropy * Eh_to_Kcal_mol * 1000.0)), " "])
                 thermo_data_table.add_row([" ", " " , " "])
     
     return isContentAdded
@@ -1051,19 +1114,19 @@ def render_CDFT_global_indices(section, computed_data: ComputedData, report_type
     with section.create(LongTable("p{0.6\\textwidth} p{0.2\\textwidth} p{0.2\\textwidth}")) as CDFT_indicies_table :
         CDFT_indicies_table.add_row([" ", " " , " "])
         if A != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Electron Affinity', "%.4f hartrees" % A , ""  ] )
+            CDFT_indicies_table.add_row(['CDFT indices: Electron Affinity', "%.3f eV" % A , ""  ] )
             
         if I != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Ionisation Potential', "%.4f hartrees" % I , ""  ] )
+            CDFT_indicies_table.add_row(['CDFT indices: Ionisation Potential', "%.3f eV" % I , ""  ] )
         
         if Khi != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Electronegativity', "%.4f hartrees" % Khi , ""  ] )
+            CDFT_indicies_table.add_row(['CDFT indices: Electronegativity', "%.3f eV" % Khi , ""  ] )
         
         if Eta != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Hardness', "%.4f hartrees" % Eta , ""  ] )
+            CDFT_indicies_table.add_row(['CDFT indices: Hardness', "%.3f eV" % Eta , ""  ] )
     
         if Omega != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Electrophilicity', "%.4f " % Omega , ""  ] )
+            CDFT_indicies_table.add_row(['CDFT indices: Electrophilicity', "%.3f eV" % Omega , ""  ] )
         
         if DeltaN != None:
             CDFT_indicies_table.add_row(['CDFT indices: Electron-flow', "%.4f e-" % DeltaN, ""  ] )
@@ -1394,14 +1457,14 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
                 d_ct_val = d_ct[idx]
                 q_ct_val = q_ct[idx]
             
-            # Skip if no data computed
-            # Only print the visualization of the user-selected excited transition
-            if (
-                lambda_val is None
-                or d_ct_val is None
-                or q_ct_val is None
-            ):
-                continue
+                # Skip if no data computed
+                # Only print the visualization of the user-selected excited transition
+                if (
+                    lambda_val is None
+                    or d_ct_val is None
+                    or q_ct_val is None
+                ):
+                    continue
 
             trans = et_transitions[idx]
             CIS = build_CIS_string(trans, homo_ind, filter_threshold=0 if is_optimized else 5)
@@ -1514,6 +1577,7 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
     for log_idx, log_file in enumerate(log_files):
         
         et_transitions = computed_data.results.excited_states.et_transitions[log_idx]
+        et_sym = computed_data.results.excited_states.et_sym[log_idx]
         jobs = job_types[log_idx]
         
         if (
@@ -1523,18 +1587,18 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
             continue
         
         for k in range(len(et_transitions)):
-            # viz_EDD names singlet states EDD-S<n> and triplet states EDD-T<n>
-            for spin_letter in ("S", "T"):
-                nomPng = f"img-log{log_idx+1}-EDD-{spin_letter}{k+1}.png"
-                if os.path.isfile(output_dir + nomPng):
-                    break
-            nomPng_cam2 = f"img-log{log_idx+1}-EDD-{spin_letter}{k+1}_cam2.png"
+            # viz_EDD names the files EDD-S<n> (singlet), EDD-T<n> (triplet), EDD-<n> (other states,
+            # e.g. unrestricted), see utility_services.naming
+            letter = spin_letter(et_sym[k]) if et_sym is not None and k < len(et_sym) else ""
+            state = f"{letter}{k+1}" if letter else f"state {k+1}"
+            nomPng = f"img-log{log_idx+1}-EDD-{letter}{k+1}.png"
+            nomPng_cam2 = f"img-log{log_idx+1}-EDD-{letter}{k+1}_cam2.png"
             
             if (os.path.isfile(output_dir + nomPng)) :
                 if (os.path.isfile(output_dir + nomPng_cam2)) :
-                    figure_two_col(section, nomPng, nomPng_cam2, caption=f"Representation of the Electron Density Difference ({spin_letter}{k+1}) from two points of view. (Source: {log_file})")
+                    figure_two_col(section, nomPng, nomPng_cam2, caption=f"Representation of the Electron Density Difference ({state}) from two points of view. (Source: {log_file})")
                 else:
-                    figure_one_col(section, nomPng, caption=f"Representation of the Electron Density Difference ({spin_letter}{k+1}). (Source: {log_file})")
+                    figure_one_col(section, nomPng, caption=f"Representation of the Electron Density Difference ({state}). (Source: {log_file})")
                 
                 if (isContentAdded == False):
                     isContentAdded = True
@@ -1635,8 +1699,13 @@ def render_optimized_es_transitions(section, computed_data: ComputedData, report
         if job_types[i] == None or "opt_es" not in job_types[i]:
             continue
 
-        emi_state = config.logfiles[i].excited_state_number
+        emi_state = config_logfile(config, computed_data, i).excited_state_number
         indices = emi_state - 1
+        et_energies = computed_data.results.excited_states.et_energies[i]
+        if et_energies is None or not 0 <= indices < len(et_energies):
+            print(f"Warning: excited_state_number {emi_state} of {log_files[i]} is not among its "
+                  f"{0 if et_energies is None else len(et_energies)} excited states: no emission table.")
+            continue
         
         content_added = render_excited_state_transitions_table(
             section,
@@ -1729,23 +1798,28 @@ def render_optimized_es_EDD(section, output_dir, computed_data: ComputedData, co
         if not any("_es" in jb for jb in jobs):
             continue
         
-        emi_state = config.logfiles[log_idx].excited_state_number
+        emi_state = config_logfile(config, computed_data, log_idx).excited_state_number
+        et_sym = computed_data.results.excited_states.et_sym[log_idx]
+        if et_sym is None or not 0 < emi_state <= len(et_sym):
+            continue
+        letter = spin_letter(et_sym[emi_state - 1])
+        state = f"{letter}{emi_state}" if letter else f"state {emi_state}"
         
-        # figure with EDD for emission
-        imgNamePng = f"img-log{log_idx}-emi-EDD-S{emi_state}.png" 
-        imgNamePng2 = f"img-log{log_idx}-emi-EDD-S{emi_state}_cam2.png" 
+        # figure with EDD for emission (named by output_optimized_es_EDD_DIP)
+        imgNamePng = f"img-log{log_idx}-emi-EDD-{letter}{emi_state}.png" 
+        imgNamePng2 = f"img-log{log_idx}-emi-EDD-{letter}{emi_state}_cam2.png" 
         if (not os.path.isfile(output_dir + imgNamePng)) :
             continue
         
         if (os.path.isfile(output_dir + imgNamePng2)):
             figure_two_col(section, imgNamePng, imgNamePng2, 
-                caption=f"Representation of the Electron Density Difference (S{emi_state}) after optimization of the excited state from two points of view. "
+                caption=f"Representation of the Electron Density Difference ({state}) after optimization of the excited state from two points of view. "
                             + "The excited electron and the hole regions are indicated by respectively white and blue surfaces to ease "
                             + f"comparison with the corresponding absorption transition. (Source: {log_file})"
             )
         else:
             figure_one_col(section, imgNamePng, taillePng="10cm", 
-                caption=f"Representation of the Electron Density Difference (S{emi_state}) after optimization of the excited state. "
+                caption=f"Representation of the Electron Density Difference ({state}) after optimization of the excited state. "
                             + "The excited electron and the hole regions are indicated by respectively white and blue surfaces to ease "
                             + f"comparison with the corresponding absorption transition. (Source: {log_file})"
             )
@@ -1855,7 +1929,7 @@ def render_atomic_coordinates(doc, computed_data: ComputedData):
             atoms=atoms,
             atoms_Z=atoms_Z,
             log_file=log_file,
-            table_title='Table. Converged cartesian atomic coordinates in Angstroms',
+            table_title=coordinates_title(computed_data, i),
         )
 
 

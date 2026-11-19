@@ -14,6 +14,8 @@ class Metadata(CustomModel):
     discretizable: bool = None
     archivable: bool = None
     archivable_for_new_entry: bool = None
+    # Index of the YAML logfiles entry this model comes from (a log file may contain several steps)
+    config_idx: int = None
 
 
 class MoleculeConnectivity(CustomModel):

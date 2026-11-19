@@ -45,15 +45,20 @@ def split_logfile_gaussian(logfile, log_storage_path, verbose):
     # FLAG to add copyright at the beginning of each step.
     cur_log_fd = open(cur_log, "w")
     file_start = True
+    trailing_job = False  # a new job started after the last normal termination
     for cur_l, line in enumerate(lines):
         if file_start:
             cur_log_fd.write(" Copyright (c) 1988,1990,1992,1993,1995,1998,2003,2009,2013,\n")
             cur_log_fd.write("            Gaussian, Inc.  All Rights Reserved.\n")
             file_start = False
+            trailing_job = False
             
         cur_log_fd.write(line)
+        if " Initial command:" in line or " Entering Link 1" in line:
+            trailing_job = True
         if line.find(TERM) > -1 :
             file_start = True
+            trailing_job = False
             if verbose:
                 print("=> ",line)
             log_files.append(cur_log)
@@ -67,6 +72,8 @@ def split_logfile_gaussian(logfile, log_storage_path, verbose):
                 
     if not cur_log_fd.closed :
         cur_log_fd.close()
+    if trailing_job and log_files:
+        print(f"Warning: the last step of '{logfile}' has no '{TERM}' (interrupted job?); it is ignored.")
         
     return log_files
 
@@ -109,12 +116,16 @@ def split_logfile_orca(logfile, log_storage_path, verbose):
     # FLAG to add software name and version at the beginning of each step.
     cur_log_fd = open(cur_log, "w")
     file_start = True
+    trailing_job = False  # a new job started after the last normal termination
     for cur_l, line in enumerate(lines):
         if file_start:
             cur_log_fd.write("\nO   R   C   A\n")
             if program_version != "" :
                 cur_log_fd.write("\n"+program_version+"\n")
             file_start = False
+            trailing_job = False
+        if "CARTESIAN COORDINATES (ANGSTROEM)" in line:
+            trailing_job = True
 
         if "Program Version" in line:
             program_version = line
@@ -122,6 +133,7 @@ def split_logfile_orca(logfile, log_storage_path, verbose):
         cur_log_fd.write(line)
         if line.find(TERM) > -1 :
             file_start = True
+            trailing_job = False
             if verbose:
                 print("=> ",line)
             log_files.append(cur_log)
@@ -135,6 +147,8 @@ def split_logfile_orca(logfile, log_storage_path, verbose):
                 
     if not cur_log_fd.closed :
         cur_log_fd.close()
+    if trailing_job and log_files:
+        print(f"Warning: the last step of '{logfile}' has no '{TERM}' (interrupted job?); it is ignored.")
         
     return log_files
 
@@ -254,6 +268,7 @@ def try_update_value(
 
 
 def general_param_subsection(data_model: LogData, data_json, data, obdata):
+    all_unique_theory = np.array([])
     try:
         all_unique_theory = np.unique(data.metadata['methods'])
         if len(all_unique_theory) > 1:
@@ -305,8 +320,10 @@ def general_param_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "comp_details.general.ao_names", data_json, ['atoms', 'orbitals', 'names'])
     
     try:
-        data_model.comp_details.general.is_closed_shell = repr(len(data.moenergies) == 1 
-                                                            or np.allclose(*data.moenergies, atol=1e-6))
+        # A ROHF/ROKS open shell (multiplicity > 1) also has a single set of MO energies
+        data_model.comp_details.general.is_closed_shell = repr(data.mult == 1
+                                                            and (len(data.moenergies) == 1
+                                                                 or np.allclose(*data.moenergies, atol=1e-6)))
     except:
         pass
     
@@ -373,8 +390,9 @@ def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata
         # data insertion into JSON
         data_model.results.wavefunction.MO_coefs = mo_coefs
     except Exception as e:
-        # partial MO data (qc lvl2 takes the decision)
-        pass
+        # partial MO data: no orbital pictures can be made from this log
+        print(f"Warning: MO data of {getattr(data, 'quchemreport_logfile', '?')} could not be read "
+              f"({type(e).__name__}: {e}); no orbital grids from this log.")
     
     try_update_value(data_model, "results.wavefunction.total_molecular_energy", data_json, ['properties', 'energy', 'total'])
     
@@ -413,6 +431,72 @@ def geom_results_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "results.geometry.geometric_values", data_json, ['optimization', 'geometric values'])
 
 
+def _electronic_thermal_energy(logfile):
+    """Last 'sum of electronic and thermal energies' of a Gaussian or ORCA log, in hartree."""
+    import re
+    if not logfile or not os.path.isfile(logfile):
+        return None
+    patterns = (r"Sum of electronic and thermal Energies=\s*(-?\d+\.\d+)",    # Gaussian
+                r"Total thermal energy\s+(-?\d+\.\d+)\s+Eh")                 # ORCA
+    value = None
+    with open(logfile, errors="replace") as fd:
+        for line in fd:
+            for pattern in patterns:
+                found = re.search(pattern, line)
+                if found:
+                    value = float(found.group(1))
+    return value
+
+
+_ORCA_FUNCTIONAL_NAMES = {name.lower() for name in (
+    "HFS", "LDA", "LSD", "VWN", "VWN3", "VWN5", "PWLDA", "BP86", "BP", "BLYP", "OLYP", "GLYP", "XLYP", "PW91",
+    "mPWPW", "mPWLYP", "PBE", "RPBE", "revPBE", "PWP", "B97-D", "B97-D3", "B97-3c", "TPSS", "M06L", "M06-L",
+    "SCAN", "rSCAN", "r2SCAN", "r2SCAN-3c", "B97M-V", "B97M-D3BJ", "B97M-D4", "B1LYP", "B3LYP", "B3LYP/G",
+    "O3LYP", "X3LYP", "B1P", "B3P", "B3PW", "PW1PW", "mPW1PW", "mPW1LYP", "PBE0", "revPBE0", "PBEh-3c",
+    "HSE06", "TPSSh", "TPSS0", "M06", "M062X", "M06-2X", "MN15", "MN15L", "PW6B95", "BHandHLYP", "r2SCANh",
+    "r2SCAN0", "r2SCAN50", "wB97", "wB97X", "wB97X-D3", "wB97X-D3BJ", "wB97X-D4", "wB97X-V", "wB97M-V",
+    "wB97M-D3BJ", "wB97M-D4", "wB97X-3c", "CAM-B3LYP", "LC-BLYP", "LC-PBE", "LC-wPBE", "B2PLYP", "B2GP-PLYP",
+    "mPW2PLYP", "DSD-BLYP", "DSD-PBEP86", "DSD-PBEB95", "PWPB95", "wB2PLYP", "wB2GP-PLYP", "RSX-QIDH",
+    "PBE-QIDH", "PBE0-DH", "B3LYP-D3", "PBE0-D3")}
+
+
+def _orca_functional(logfile, keywords=None):
+    """ORCA functional (cclib does not read it): the functional keyword of the input when
+    there is one, followed by the definition printed by ORCA (exchange, correlation, HF exchange
+    and DFT scalings), used to compare the levels of theory. None if the log has no DFT block."""
+    import re
+    if not logfile or not os.path.isfile(logfile):
+        return None
+    fields = (("Exchange", r"^\s*Exchange Functional\s+Exchange\s+\.+\s*(\S+)"),
+              ("Correlation", r"^\s*Correlation Functional\s+Correlation\s+\.+\s*(\S+)"),
+              ("HF exchange", r"ScalHFX\s+\.+\s*(\S+)"),
+              ("DF-GGA-X", r"ScalDFX\s+\.+\s*(\S+)"),
+              ("DF-GGA-C", r"ScalDFC\s+\.+\s*(\S+)"),
+              ("range separation", r"RangeSepMu\s+\.+\s*(\S+)"),
+              ("perturbative correction", r"Perturbative correction\s+\.+\s*(\S+)"))
+    found = {}
+    with open(logfile, errors="replace") as fd:
+        for line in fd:
+            for name, pattern in fields:
+                match = re.search(pattern, line)
+                if match and name not in found:
+                    found[name] = match.group(1)
+    if "Exchange" not in found:
+        return None
+
+    def value(text):
+        try:
+            return "%g" % float(text)
+        except ValueError:
+            return text
+
+    if value(found.get("perturbative correction", "0")) == "0":
+        found.pop("perturbative correction", None)
+    definition = ", ".join(f"{name} {value(found[name])}" for name, _ in fields if name in found)
+    names = [k for k in (keywords or []) if str(k).lower() in _ORCA_FUNCTIONAL_NAMES]
+    return f"{names[0]} ({definition})" if names else definition
+
+
 def freq_results_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "results.freq.entropy", data_json, ['properties', 'entropy'])
     try:
@@ -422,8 +506,10 @@ def freq_results_subsection(data_model: LogData, data_json, data, obdata):
     
     try_update_value(data_model, "results.freq.enthalpy", data_json, ['properties', 'enthalpy'])
     try_update_value(data_model, "results.freq.free_energy", data_json, ['properties', 'energy', 'free energy'])
-    try_update_value(data_model, "results.freq.zero_point_energy", data_json, ['properties', 'zero point energy'])
-    try_update_value(data_model, "results.freq.electronic_thermal_energy", data_json, ['properties', 'electronic thermal energy'])
+    # cclib: zero-point vibrational energy correction (hartree/particle), not E + ZPE
+    try_update_value(data_model, "results.freq.zero_point_energy", data_json, ['properties', 'energies', 'zero-point correction'])
+    # Sum of electronic and thermal energies: not provided by cclib, read in the log
+    # (hartree) by logfile_to_obj
     try_update_value(data_model, "results.freq.vibrational_freq", data_json, ['vibrations', 'frequencies'])
     try_update_value(data_model, "results.freq.vibrational_int", data_json, ['vibrations', 'intensities', 'IR'])
     
@@ -559,11 +645,21 @@ def full_report(logfile, data_json, data, obdata, verbose=False):
 def logfile_to_obj(logfile, verbose=False):
     # reading with cclib
     data = cclib.parser.ccopen(logfile).parse()
+    data.quchemreport_logfile = os.path.basename(logfile)  # for messages only
     data_json = json.loads(data.writejson())
     # openbabel sur XYZ
     obdata = pybel.readstring("xyz", data.writexyz())
     # construct raw data object 
-    return full_report(logfile, data_json, data, obdata, verbose=verbose)
+    data_model = full_report(logfile, data_json, data, obdata, verbose=verbose)
+    thermal = _electronic_thermal_energy(logfile)
+    if thermal is not None:
+        data_model.results.freq.electronic_thermal_energy = thermal
+    # cclib reads no functional from ORCA logs: without it the 'theory' test could not
+    # see two different functionals
+    general = data_model.comp_details.general
+    if general.functional is None and general.package == "orca":
+        general.functional = _orca_functional(logfile, data.metadata.get("keywords"))
+    return data_model
 
 
 """Check if logfile is archivable and candidate for a new entry.
@@ -620,8 +716,22 @@ def process_logfile(config: Config, logfile, logfile_idx, log_storage_path="", v
         raise ScanlogException(f"No completed calculation found in '{logfile}'.")
     data_list = []
     
-    for log in log_files:
-        data_model: LogData = logfile_to_obj(log, verbose=verbose)
+    if len(log_files) > 1:
+        print(f"Note: '{logfile}' contains {len(log_files)} steps; each one is read as a separate log "
+              f"with the type {config.logfiles[logfile_idx].type} given in the YAML file.")
+    for step, log in enumerate(log_files):
+        try:
+            data_model: LogData = logfile_to_obj(log, verbose=verbose)
+        except ScanlogException:
+            raise
+        except Exception as err:
+            if verbose:
+                traceback.print_exc()
+            raise ScanlogException(
+                f"Reading of '{logfile}' (step {step + 1}/{len(log_files)}) failed in cclib or Open Babel: "
+                f"{type(err).__name__}: {err}. Check this log file (or remove it from the YAML file)."
+            ) from err
+        data_model.metadata.config_idx = logfile_idx
         data_model.comp_details.general.job_type = config.logfiles[logfile_idx].type   
         # job_type_guess(res_json) # jobtype logique replaced and metadata.discretizable moved over to metadata section
         quality_check_lvl2(data_model, solver, verbose=verbose)

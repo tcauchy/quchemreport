@@ -3,7 +3,7 @@ import json
 import sys
 from quchemreport.config.config import Config
 from quchemreport.data_enrichment.compute_flags import ComputeFlags
-from quchemreport.utility_services.computed_data import ComputedData
+from quchemreport.utility_services.computed_data import ComputedData, config_logfile
 from quchemreport.visualization_engine import visu_mayavi, visu_plots, visu_txt
 from quchemreport.data_enrichment import calc_orb
 from quchemreport.utility_services.parameters import obk_step
@@ -328,8 +328,10 @@ def output_es_absorption_and_CD_spectrum(computed_data: ComputedData, do_cd, do_
         ):
             print(f"Generating Absorption spectrum done for {log_file}.")
             # If no CD write only Absorption spectrum in text file to compare with experimental data
+            # CD_spectrum is None when all the rotatory strengths are 0 (achiral molecule)
             if (
-                not do_cd 
+                not do_cd
+                or CD_spectrum is None
                 or len(CD_spectrum) == 0
             ):
                 visu_txt.textfile_UV(xvalues, abso_spectrum, file_name=output_dir+f"log{log_idx + 1}-")       
@@ -451,28 +453,26 @@ def output_optimized_es_absorption_and_CD_spectrum(computed_data: ComputedData, 
         if not any("_es" in jb for jb in jobs):
             continue
         
-        emi_state = config.logfiles[log_idx].excited_state_number
+        emi_state = config_logfile(config, computed_data, log_idx).excited_state_number
         if emi_state is None:
             # Invalid emi_state so it will stop when checking the emi_index
             emi_state = -1
         
-        et_transitions = computed_data.results.excited_states.et_transitions[log_idx]
-        
-        emi_index = emi_state - 1
-        if (emi_index) < 0:
-            print("Incoherent excited state optimization detected. Problem with root number")
-            print(f"Emission state (user input) = {emi_state} ; expected to be within [1, {len(et_transitions)}]")
-            continue
-        
         et_energy = computed_data.results.excited_states.et_energies[log_idx]
         et_osc = computed_data.results.excited_states.et_oscs[log_idx]
         et_rot = computed_data.results.excited_states.et_rot[log_idx]
-        
+
         # Skip if data is missing
         if (
             et_energy is None
             or et_osc is None
         ):
+            continue
+
+        emi_index = emi_state - 1
+        if emi_index < 0 or emi_index >= len(et_energy):
+            print("Incoherent excited state optimization detected. Problem with root number")
+            print(f"Emission state (user input) = {emi_state} ; expected to be within [1, {len(et_energy)}]")
             continue
         
         emi_energy = et_energy[emi_index]
@@ -530,10 +530,6 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
     log_files = computed_data.metadata.log_files
     job_types = computed_data.comp_details.general.job_type
     
-    elements_3D_coords = computed_data.results.geometry.elements_3D_coords[ref_id]
-    atom_pairs = computed_data.molecule.connectivity.atom_pairs[ref_id]
-    atoms_Z = computed_data.molecule.atoms_Z[ref_id]
-    
     print("")
     
     for log_idx,log_file in enumerate(log_files):
@@ -543,22 +539,30 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
         if not any("_es" in jb for jb in jobs):
             continue
     
+        # Draw the molecule of the log whose orbitals gave the EDD (opt_es log or reference)
+        geom_idx = computed_data.derived.optimized_excited_states.orbitals_log_idx[log_idx]
+        if geom_idx is None:
+            geom_idx = ref_id
+        elements_3D_coords = computed_data.results.geometry.elements_3D_coords[geom_idx]
+        atom_pairs = computed_data.molecule.connectivity.atom_pairs[geom_idx]
+        atoms_Z = computed_data.molecule.atoms_Z[geom_idx]
+    
         et_transitions = computed_data.results.excited_states.et_transitions[log_idx]
-        emi_state = config.logfiles[log_idx].excited_state_number
+        emi_state = config_logfile(config, computed_data, log_idx).excited_state_number
         
         # Skip if data is missing
         if (
             et_transitions is None
             or emi_state is None
         ):
-            return
+            continue
         
         emi_index = emi_state - 1
         if (
             emi_index < 0
             or emi_index >= len(et_transitions)
         ):
-            return
+            continue
     
         et_sym = computed_data.results.excited_states.et_sym[log_idx]
         et_rot = computed_data.results.excited_states.et_rot[log_idx]
@@ -593,7 +597,8 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
         # Using TD_output[0] instead of the index of the transition as TD_output only contain the transition of index emi_index here
         discretized_EDD_voxels = [TD_output[0][0]]
         
-        print(f"Optimized Excited State EDD visualization in progress for the transition S{emi_state}")
+        # file img-log<i>-emi-EDD-S<n>.png (T<n> for a triplet, <n> for other states), as in the report
+        print(f"Optimized Excited State EDD visualization in progress for the state {emi_state}")
         visu_mayavi.viz_EDD(
             discretized_EDD_voxels,
             grid_X,
@@ -602,21 +607,21 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
             elements_3D_coords,
             atom_pairs,
             atoms_Z,
-            et_sym, 
-            file_name=output_dir+f"img-log{log_idx}-emi", labels=[f"S{emi_state}"]
+            et_sym[emi_index], 
+            file_name=output_dir+f"img-log{log_idx}-emi", labels=[emi_state]
         ) 
         
         if (emi_rotat != 0.0):
-            data_dip = all_data_dip[emi_state]
+            data_dip = all_data_dip[emi_index]
             if data_dip is not None:
                 visu_mayavi.viz_dip(
                     data_dip,
                     elements_3D_coords,
                     atom_pairs,
                     atoms_Z,
-                    et_sym,
+                    et_sym[emi_index],
                     file_name=output_dir+f"img-log{log_idx}-emi",
-                    labels=[f"S{emi_state}"]
+                    labels=[emi_state]
                 )
                 print(f"Generating transition dipole images for selected transition: {emi_state}")
 

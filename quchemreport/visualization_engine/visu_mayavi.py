@@ -15,6 +15,7 @@ from quchemreport.utility_services.log_data import LogData
 
 #from utils import A_to_a0
 from quchemreport.utility_services import units
+from quchemreport.utility_services.naming import spin_letter
 
 ## Import mayavi defaults parameters
 from quchemreport.utility_services.parameters import img_width, img_height, surf_opacity, colors, scale, azimuth_cam1, azimuth_cam2, elev_angle_cam1, elev_angle_cam2
@@ -149,16 +150,29 @@ def _set_cam(figure, cam):
 ## Set the Iso contour value for mayavi from a percent
 # Choose the % (between 0 to 100) of the positive values to show in picture.
 def CalcCutOff(data,IsoContourPercent=30):
+    """Positive and negative iso-values. A sign absent from the data (e.g. 1s orbital of an
+    atom, sigma_g of H2) gives None: no iso-surface is drawn for it."""
     #data are the function values for each voxels. Transforma as a list, sort and select the positive values
-    datar = data.ravel()
-    datasortP = np.sort(datar[datar>0])
-    datasortN = np.sort(np.abs(datar[datar<0]))
-    #cumulative sum of function values, normalize
-    cumdatasortP=np.cumsum(datasortP)
-    cumdatasortPnorm=cumdatasortP/cumdatasortP[-1]*100.
-    cumdatasortN=np.cumsum(datasortN)
-    cumdatasortNnorm=cumdatasortN/cumdatasortN[-1]*100.
-    return datasortP[cumdatasortPnorm>=(100.-IsoContourPercent)][0], -datasortN[cumdatasortNnorm>=(100.-IsoContourPercent)][0]
+    datar = np.asarray(data).ravel()
+
+    def cutoff(values):
+        if values.size == 0:
+            return None
+        datasort = np.sort(values)
+        #cumulative sum of function values, normalize
+        cumdatasort = np.cumsum(datasort)
+        cumdatasortnorm = cumdatasort/cumdatasort[-1]*100.
+        return datasort[cumdatasortnorm>=(100.-IsoContourPercent)][0]
+
+    cut_p = cutoff(datar[datar>0])
+    cut_n = cutoff(np.abs(datar[datar<0]))
+    return cut_p, (-cut_n if cut_n is not None else None)
+
+
+def _iso_surfaces(source, figure, cutoffs_and_colors):
+    """Iso-surfaces of source at each (cutoff, color), skipping the None cutoffs (see CalcCutOff)."""
+    return [mlab.pipeline.iso_surface(source, figure=figure, contours=[cut], color=color, opacity=surf_opacity)
+            for cut, color in cutoffs_and_colors if cut is not None]
 
 ## Visualize
 
@@ -347,17 +361,16 @@ def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=Non
     for i, series in enumerate(data):
         Cutoffp, Cutoffn = CalcCutOff(series,IsoContourPercent=20) 
         #print(Cutoffp, Cutoffn)
-        MO_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)        
-        MOp = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoffp ], color=positive_color or colors["OM"], opacity=surf_opacity)
-        MOn = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoffn ], color=negative_color or colors["NEG"], opacity=surf_opacity)
+        MO_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
+        surfaces = _iso_surfaces(MO_data, figure, [(Cutoffp, positive_color or colors["OM"]),
+                                                   (Cutoffn, negative_color or colors["NEG"])])
         if file_name is not None:
             figure = _set_cam(figure, "cam1")
             mlab.savefig("{}-MO-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
             figure = _set_cam(figure, "cam2")
             mlab.savefig("{}-MO-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-        MO_data.remove()
-        MOp.remove()
-        MOn.remove()
+        for module in [MO_data] + surfaces:
+            module.remove()
     mlab.close()
 
 @_reduced_grid("sensitive")
@@ -383,27 +396,16 @@ def viz_EDD(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file
     for i, series in enumerate(data):
         Cutoffp, Cutoffn = CalcCutOff(series,IsoContourPercent=30) 
         D_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
-        Dp = mlab.pipeline.iso_surface(D_data, figure=figure, contours=[ Cutoffp ], color=colors["EDD"], opacity=surf_opacity)
-        Dn = mlab.pipeline.iso_surface(D_data, figure=figure, contours=[ Cutoffn ], color=colors["NEG"], opacity=surf_opacity)
+        surfaces = _iso_surfaces(D_data, figure, [(Cutoffp, colors["EDD"]), (Cutoffn, colors["NEG"])])
         if file_name is not None:
-            if 'Singlet' in et_sym:
-                figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-EDD-S{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-                figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-EDD-S{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-            elif 'Triplet' in et_sym:
-                figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-EDD-T{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-                figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-EDD-T{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-            else:
-                figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-EDD-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-                figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-EDD-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-        D_data.remove()
-        Dp.remove()
-        Dn.remove()
+            # EDD-S<n> (singlet), EDD-T<n> (triplet), EDD-<n> (other, e.g. unrestricted)
+            name = "{}-EDD-{}{}".format(file_name, spin_letter(et_sym), labels[i] if labels is not None else i)
+            figure = _set_cam(figure, "cam1")
+            mlab.savefig(name + ".png", figure=figure, size=_size(size))
+            figure = _set_cam(figure, "cam2")
+            mlab.savefig(name + "_cam2.png", figure=figure, size=_size(size))
+        for module in [D_data] + surfaces:
+            module.remove()
 
     mlab.close()
 
@@ -434,27 +436,15 @@ def viz_Oif(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file
     for i, series in enumerate(data):
         Cutoffp, Cutoffn = CalcCutOff(series,IsoContourPercent=30) 
         O_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
-        Op = mlab.pipeline.iso_surface(O_data, figure=figure, contours=[ Cutoffp ], color=colors["Oif"], opacity=surf_opacity)
-        On = mlab.pipeline.iso_surface(O_data, figure=figure, contours=[ Cutoffn ], color=colors["NEG"], opacity=surf_opacity)
+        surfaces = _iso_surfaces(O_data, figure, [(Cutoffp, colors["Oif"]), (Cutoffn, colors["NEG"])])
         if file_name is not None:
-            if 'Singlet' in et_sym:
-                figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-Oif-S{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-                figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-Oif-S{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-            elif 'Triplet' in et_sym:
-                figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-Oif-T{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-                figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-Oif-T{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-            else:
-                figure = _set_cam(figure, "cam1")
-                mlab.savefig("{}-Oif-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-                figure = _set_cam(figure, "cam2")
-                mlab.savefig("{}-Oif-{}_cam2.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=_size(size))
-        O_data.remove()
-        Op.remove()
-        On.remove()
+            name = "{}-Oif-{}{}".format(file_name, spin_letter(et_sym), labels[i] if labels is not None else i)
+            figure = _set_cam(figure, "cam1")
+            mlab.savefig(name + ".png", figure=figure, size=_size(size))
+            figure = _set_cam(figure, "cam2")
+            mlab.savefig(name + "_cam2.png", figure=figure, size=_size(size))
+        for module in [O_data] + surfaces:
+            module.remove()
     mlab.close()
 
 def viz_dip(data, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=None, labels=None, size=None):
@@ -480,21 +470,11 @@ def viz_dip(data, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file_name=Non
         MuText = mlab.text3d(D[0][0]*scale[dip_type], D[0][1]*scale[dip_type], D[0][2]*scale[dip_type], dip_type, color=colors[dip_type], scale=0.1, figure=figure)
         
     if file_name is not None:
-        if 'Singlet' in et_sym:
-            figure = _set_cam(figure, "cam1")
-            mlab.savefig("{}-DIP-S{}.png".format(file_name, labels[0]), figure=figure, size=_size(size))
-            figure = _set_cam(figure, "cam2")
-            mlab.savefig("{}-DIP-S{}_cam2.png".format(file_name, labels[0]), figure=figure, size=_size(size))
-        elif 'Triplet' in et_sym:
-            figure = _set_cam(figure, "cam1")
-            mlab.savefig("{}-DIP-T{}.png".format(file_name, labels[0]), figure=figure, size=_size(size))
-            figure = _set_cam(figure, "cam2")
-            mlab.savefig("{}-DIP-T{}_cam2.png".format(file_name, labels[0]), figure=figure, size=_size(size))
-        else:
-            figure = _set_cam(figure, "cam1")
-            mlab.savefig("{}-DIP-{}.png".format(file_name, labels[0]), figure=figure, size=_size(size))
-            figure = _set_cam(figure, "cam2")
-            mlab.savefig("{}-DIP-{}_cam2.png".format(file_name, labels[0]), figure=figure, size=_size(size))
+        name = "{}-DIP-{}{}".format(file_name, spin_letter(et_sym), labels[0])
+        figure = _set_cam(figure, "cam1")
+        mlab.savefig(name + ".png", figure=figure, size=_size(size))
+        figure = _set_cam(figure, "cam2")
+        mlab.savefig(name + "_cam2.png", figure=figure, size=_size(size))
 
     mlab.clf(figure=figure)
             
@@ -632,16 +612,15 @@ def viz_Fukui(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=
     figure = _init_scene(elements_3D_coords, atom_pairs, atoms_Z) 
     Cutoffp, Cutoffn = CalcCutOff(data,IsoContourPercent=30) 
     F_data = mlab.pipeline.scalar_field(X, Y, Z, data, figure=figure)
-    Fp = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[ Cutoffp ], color=(0.0, 0.5, 0.5), opacity=surf_opacity)
-    Fn = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[ Cutoffn ], color=(0.95, 0.95, 0.95), opacity=surf_opacity)
+    surfaces = _iso_surfaces(F_data, figure, [(Cutoffp, (0.0, 0.5, 0.5)), (Cutoffn, (0.95, 0.95, 0.95))])
     
     if file_name is not None:
         figure = _set_cam(figure, "cam1")
         mlab.savefig("{}-fukui-{}.png".format(file_name, labels), figure=figure, size=_size(size))
         figure = _set_cam(figure, "cam2")
         mlab.savefig("{}-fukui-{}_cam2.png".format(file_name, labels), figure=figure, size=_size(size))
-    Fp.remove()
-    Fn.remove()
+    for module in surfaces:
+        module.remove()
 
 
 @_reduced_grid("sensitive")
@@ -669,8 +648,7 @@ def viz_Fdual(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=
 
     F_data = mlab.pipeline.scalar_field(X, Y, Z, data, figure=figure)
     #print("positive Cutoff :", Cutoffp)
-    Fp = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[ Cutoffp ], color=(0.0, 0.5, 0.5), opacity=surf_opacity)
-    Fn = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[ Cutoffn ], color=(0.95, 0.95, 0.95), opacity=surf_opacity)
+    surfaces = _iso_surfaces(F_data, figure, [(Cutoffp, (0.0, 0.5, 0.5)), (Cutoffn, (0.95, 0.95, 0.95))])
 
     if file_name is not None:
         figure = _set_cam(figure, "cam1")
@@ -678,6 +656,6 @@ def viz_Fdual(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=
         figure = _set_cam(figure, "cam2")
         mlab.savefig("{}-Fdual_cam2.png".format(file_name), figure=figure, size=_size(size))
         # np.save("{}-Fdual.npy".format(file_name), data)
-    Fp.remove()
-    Fn.remove()
+    for module in surfaces:
+        module.remove()
 

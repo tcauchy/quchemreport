@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import sys
+import numpy as np
 from typing import Any, List, Optional, Tuple
 
 from quchemreport.config.config import Config
@@ -150,7 +151,7 @@ def test_package(data: ExtractedData, config: Config):
         print("ERROR: You need to provide a set of logfiles for a unique conformer : Too many different packages")
         print(packages)
         print("Program will exit.")
-        sys.exit()
+        sys.exit(1)
 
     if packages[0] != config.common_solver:
         print("WARNING: You need to provide a set of logfiles for a unique conformer : Packages are different from the specified common solver ")
@@ -167,13 +168,13 @@ def test_formula(data: ExtractedData):
         print("ERROR: You need to provide a set of logfiles for a unique conformer : Too many different formulas")
         print(data.formulas_nocharges)
         print("Program will exit.")
-        sys.exit()    
+        sys.exit(1)
     elif (len(set(data.formulas_nocharges))) == 1: 
         print("\tDetected formula:                                ... ", set(data.formulas_nocharges))
         print("\tSame formula for all logfiles:                   ...  Test OK")
     elif (len(set(data.formulas_nocharges))) == 0:
         print("ERROR: There is no correct formulas in the list. Program will exit. Contact admin")
-        sys.exit()
+        sys.exit(1)
 
 
 def test_theory(data: ExtractedData):
@@ -187,7 +188,7 @@ def test_theory(data: ExtractedData):
         print("ERROR: You need to provide a set of logfiles with the same level of theory")
         print("That means a unique functional and basis set.")
         print("Program will exit.")
-        sys.exit()  
+        sys.exit(1)
     else:
         print("\tDetected number of basis sets:                   ... ", len(set(data.basis_sets)))
         print("\tDetected functionals:                            ... ", data.functionals)
@@ -196,14 +197,26 @@ def test_theory(data: ExtractedData):
     
 
 
+# Relative tolerance on the nuclear repulsion energy (NRE) of a same geometry. The NRE is
+# computed from coordinates rounded to 1e-5 A: a rotated copy of the same geometry
+# (other orientation) changes it by up to ~1.3e-6 (relative), a 0.001 A change of
+# one bond length by >= 1.6e-5 (azulene, C10H4Br2O2S2, phenanthrene).
+NRE_RTOL = 5e-6
+
+
+def same_nre(a, b, rtol=NRE_RTOL):
+    return a is not None and b is not None and abs(a - b) <= rtol * max(abs(a), abs(b))
+
+
 def test_nuclear_repulsion(data: ExtractedData):
     # Test on NRE to ensure that there is only one conformer
-    if (len(set(data.nres_noES))) > 1:
+    nres = [nre for nre in data.nres_noES if nre is not None]
+    if nres and not same_nre(min(nres), max(nres)):
         print("\tSame geometries (no optimized excited state):    ... ", len(set(data.nres_noES)))
         print("\tDetected NRE (with optimized excited state):     ... ",data.nres)
         print("ERROR: You need to provide a set of logfiles for a unique conformer without counting the optimized excited states.")
         print("Program will exit.")
-        sys.exit()
+        sys.exit(1)
     else:
         print("\tSame conformer for all logfiles:                 ...  Test OK")
     
@@ -215,10 +228,10 @@ def test_charge(data: ExtractedData):
         print("\tDetected charges (with single points):           ... ",data.charges)
         print("ERROR: You need to provide a set of logfiles with the same charge without counting the single points.")
         print("Program will exit.")
-        sys.exit()
+        sys.exit(1)
     elif  (len (set(data.charges_noSP))) == 0 :
         print("ERROR: There is no correct charges in the list. Program will exit. Contact admin")
-        sys.exit()
+        sys.exit(1)
     else:
         print("\tSame charge for all logfiles:                    ...  Test OK")
     
@@ -232,10 +245,10 @@ def test_multiplicity(data: ExtractedData):
 
         print("ERROR: You need to provide a set of logfiles with the same electronic state.")
         print("Program will exit.")
-        sys.exit()
+        sys.exit(1)
     elif  (len(set(data.multiplicities_noSP))) == 0 :
         print("ERROR: There is no correct multiplicity in the list. Program will exit. Contact admin")
-        sys.exit()
+        sys.exit(1)
     else:
         print("\tSame multiplicity:                               ...  Test OK")
     
@@ -250,7 +263,7 @@ def test_ground_state_presence(data: ExtractedData):
 
     if not has_ground_state:
         print("ERROR: In a list of logfiles, one OPT or FREQ of a Ground State should be provided. Program will exit.")
-        sys.exit()
+        sys.exit(1)
     else:
         print("\tGround State:                                    ...  Test OK")
 
@@ -293,51 +306,85 @@ def select_reference_log(data: ExtractedData, config: Config):
     if (len(ref_idx) == 0):
         print("\nNo reference log file found. You need to specify a reference log file in the config file.")
         print("Program will exit.")
-        sys.exit()
+        sys.exit(1)
     
     # Check if multiple reference log files are specified
     if (len(ref_idx) > 1):
         print("\nMultiple reference log files found. You need to specify a single reference log file in the config file.")
         print("Program will exit.")
-        sys.exit()
+        sys.exit(1)
     
     print("\tReference:                                       ...  Test OK")
     return ref_idx[0]
 
 
+def reference_model_index(data: ExtractedData, config_reference_idx):
+    """Index of the reference among the parsed models (a YAML log file may give several
+    steps/models): first step of the reference log file that has MO coefficients, else its first step."""
+    steps = [i for i, model in enumerate(data.list_data_models)
+             if model.metadata.config_idx == config_reference_idx]
+    if not steps:
+        print("ERROR: the reference log file gave no usable data. Program will exit.")
+        sys.exit(1)
+    with_mo = [i for i in steps if len(data.MO_coeff[i]) in (1, 2)]
+    return with_mo[0] if with_mo else steps[0]
+
+
+def same_geometry(model_a, model_b, atol=1e-4):
+    """Same atoms at the same cartesian coordinates (A), orientation included: the grids
+    of one log are drawn with the atoms of the other one."""
+    a = model_a.results.geometry.elements_3D_coords
+    b = model_b.results.geometry.elements_3D_coords
+    if a is None or b is None or model_a.molecule.atoms_Z != model_b.molecule.atoms_Z:
+        return False
+    a, b = np.array(a, dtype=float).reshape(-1, 3), np.array(b, dtype=float).reshape(-1, 3)
+    return a.shape == b.shape and np.allclose(a, b, rtol=0, atol=atol)
+
+
 def select_reference_data(data: ExtractedData, reference_id, verbose: bool = False):
-    #Setting a json file as reference for discretization informations like MO coefficients and basis set.      
-    charge_ref = data.charges_noSP[reference_id]
-    multiplicity_ref = data.multiplicities_noSP[reference_id]
-    MO_coeff_ref = [] 
-    
-    package_ref = data.packages[reference_id] # TODO : To check (Added because package was handled weirdly for discretization test)
+    """reference_id is the index of the reference model (see reference_model_index).
 
-    if (len(data.basis_sets)) == 0:
-        basis_sets_ref = []
-    else:
-        basis_sets_ref = data.basis_sets[reference_id]
-    if (len(data.ao_names)) == 0:
-        ao_names_ref = []
-    else:
-        ao_names_ref = data.ao_names[reference_id]
+    The grids (MO, MEP, Fukui, EDD...) use the reference itself when it has MO
+    coefficients and a basis set; otherwise the first other log of the same
+    charge, multiplicity, geometry (NRE) and solvent that has them."""
+    models = data.list_data_models
+    ref_model = models[reference_id]
+    charge_ref = data.charges[reference_id]
+    multiplicity_ref = data.multiplicities[reference_id]
+    nres_ref = data.nres[reference_id]
+    solvent_ref = ref_model.comp_details.general.solvent
+    package_ref = data.packages[reference_id]
 
-    for i, charge in enumerate(data.charges):
-        # Previously we tested on jf[i]["comp_details"]["general"]["is_closed_shell"] : Problem some closed shell with both alpha and beta
-        if (len(data.MO_coeff[i]) == 1) or (len(data.MO_coeff[i]) == 2) : # Restricted or unrestricted calculation
-            if data.charges[i] == charge_ref and  data.multiplicities[i] == multiplicity_ref  \
-                                        and data.nres[i] == data.nres_noES[reference_id]  :
-                data_ref = data.list_data_models[i]
-                MO_coeff_ref = data.MO_coeff[i]
-                data_for_discretization = data.list_data_models[i]
-                if verbose:
-                    print("A reference data has been selected for the discretization process:", data.list_data_models[i].metadata.log_file)
-                break
-        else :
-            data_for_discretization = []
-            if verbose:
-                print("No reference data has been found for the discretization process due to MO_coeff length")
-                
+    def usable(i):
+        general = models[i].comp_details.general
+        return (len(data.MO_coeff[i]) in (1, 2)
+                and general.basis_set is not None and general.ao_names is not None
+                and data.charges[i] == charge_ref
+                and data.multiplicities[i] == multiplicity_ref
+                and same_geometry(models[i], ref_model)
+                and general.solvent == solvent_ref)
+
+    data_for_discretization = None
+    MO_coeff_ref = []
+    basis_sets_ref = []
+    ao_names_ref = []
+    for i in [reference_id] + [j for j in range(len(models)) if j != reference_id]:
+        if usable(i):
+            data_for_discretization = models[i]
+            MO_coeff_ref = data.MO_coeff[i]
+            basis_sets_ref = models[i].comp_details.general.basis_set
+            ao_names_ref = models[i].comp_details.general.ao_names
+            if i != reference_id:
+                print(f"Note: the reference log has no MO coefficients or basis set; the grids use "
+                      f"{models[i].metadata.log_file} (same charge, multiplicity, geometry, orientation and solvent).")
+            elif verbose:
+                print("A reference data has been selected for the discretization process:", models[i].metadata.log_file)
+            break
+    if data_for_discretization is None:
+        print("Warning: no log file with MO coefficients and basis set matches the reference "
+              "(same charge, multiplicity, solvent and cartesian coordinates, orientation included; "
+              "add pop=full and gfprint to the reference calculation): no MO, MEP, Fukui or EDD pictures.")
+
     return ReferenceData(
         package_ref=package_ref,
         charge_ref=charge_ref,
@@ -389,8 +436,14 @@ def test_basis_and_mo_coeff(reference_data: ReferenceData, verbose: bool = False
                 if ("PX" in ao[i]) :
                     cartesian = True
             # See which test could isolate a spherical p orbital
-            #    else : 
+            #    else :
             #        spherical = True
+            # Only s functions (e.g. He, H2 with 6-31G or STO-3G): cartesian and spherical
+            # functions are then the same
+            if not cartesian and all(name.rstrip().endswith("S") for name in ao):
+                cartesian = True
+                if verbose:
+                    print("Basis set with s functions only")
         if (cartesian is True) and (spherical is True) :
             discret_proc = False      
         elif (cartesian is True) and (spherical is False) :
@@ -403,7 +456,7 @@ def test_basis_and_mo_coeff(reference_data: ReferenceData, verbose: bool = False
                 print("Spherical basis set detected")
         else :
             print("ERROR: The basis set is neither cartesian nor spherical nor mixed. Contact admin.")
-            sys.exit()
+            sys.exit(1)
         if discret_proc is True :
             print("All discretization tests OK.")
         else :
@@ -425,8 +478,8 @@ def tests(list_data_models: List[LogData], config: Config):
 
     run_selected_tests(extracted, config, verbose=verbose)
     
-    # Test references
-    reference_id = select_reference_log(extracted, config)
+    # Test references (YAML index, then index among the parsed models)
+    reference_id = reference_model_index(extracted, select_reference_log(extracted, config))
     
     # End of uniformity / conformity tests. 
     # At this point : we have a set of log files of a unique conformer
