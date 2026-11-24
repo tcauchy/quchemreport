@@ -10,7 +10,8 @@
 # - Use true/false (without quotes) for options.
 # - Any output option will be ignored if the necessary data is not present.
 #
-# Supported log file types: sp, opt, opt_es, freq, freq_es, td, nmr, redox_state
+# Supported log file types: sp, opt, opt_es, freq, freq_es, td, nmr
+# Documentation: docs/README.md (options: docs/configuration.md)
 # ==============================================================================
 
 # Solver used for all log files: gaussian, orca, etc.
@@ -101,7 +102,8 @@ output:
         # Display the MO diagrams generated on the data from the reference logfile
         MO_diagrams: true
 
-      # Display the MEP Map generated on the data from the reference logfile
+      # Display the MEP Map generated on the data from the reference logfile: MEP on the
+      # 0.001 e-/bohr3 density surface, fixed colour scale, numbered minima and maxima and their table
       # ⚠️ Warning: Computing the MEP Map can be very memory-consuming and may cause the computation of the MEP map to crash. 
       # If a crash occurs, the program will continue running, but the MEP Map will be skipped.
       MEP_maps: true
@@ -168,18 +170,11 @@ logging:
   console: true
   level: info # debug | info | warning | error
 
-# ⚠️ Warning : Camera control has yet to be implemented
-# For now the camera for the molecule reprensentation is PCA-based
-camera_view:
-  mode:
-    auto # auto = PCA-based "best view" (recommended)
-    # preset = static direction view (+x, +y, +z)
-    # manual = user-defined view saved to JSON
-  preset: z # used only if mode = preset; values: x, y, z
-  view_file: null # used only if mode = manual; path to a saved .json
+# The points of view of the 3D pictures are chosen automatically from the geometry
+# (quchemreport/visualization_engine/camera.py); a former camera_view section is ignored.
 
 resources:
-  nproc: 4 # processes (orbkit) or threads (qmckl) for the grid computations; omitted = 20
+  nproc: 4 # threads for the grid computations (orbitals, MEP, densities); omitted = 20
   memory: 8 # Not enforced yet
   # Use offscreen mode for 3D renderings every times
   mayavi_headless: true

@@ -1,3 +1,12 @@
+"""Pictures of the report, from the ComputedData object.
+
+generate_visualization draws, for the outputs asked in the YAML file (ComputeFlags), the 3D
+pictures (visu_mayavi), the spectra (visu_plots) and their text files (visu_txt), in the output
+folder. File names follow the convention of docs/architecture.md: ``img-log<k>-<content>.png``
+with k the model index plus one; pictures of the reference only (Fukui functions) have no
+number. The report reads the same names (report_generator.generate_report).
+"""
+
 from collections import defaultdict
 import json
 import sys
@@ -8,6 +17,7 @@ from quchemreport.visualization_engine import visu_mayavi, visu_plots, visu_txt
 from quchemreport.data_enrichment import calc_orb
 from quchemreport.utility_services.parameters import obk_step
 from quchemreport.utility_services.naming import state_label, state_number
+from quchemreport.data_enrichment.mep_surface import MEP_SURFACE_ISOVALUE
 
 
 def generate_molecule_representation(
@@ -16,6 +26,20 @@ def generate_molecule_representation(
     log_idx, sources="N/A"
 ):
     
+    """Topology picture of one model (``img-log<k>-TOPOLOGY.png``).
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    nuclear_repulsion_energy_from_xyz : float
+        Only checked for presence (a model without geometry gives no picture).
+    elements_3D_coords, atom_pairs, atoms_Z :
+        Geometry, bonds and atomic numbers of the model.
+    log_idx : int
+        Model index.
+    sources : str, optional
+        Log files of the group, for the message.
+    """
     output_dir = computed_data.metadata.output_dir
     
     if (
@@ -24,7 +48,7 @@ def generate_molecule_representation(
         and atom_pairs is not None
         and atoms_Z is not None
     ):
-        visu_mayavi.topoWithPCA(
+        visu_mayavi.viz_topology(
             elements_3D_coords,
             atom_pairs,
             atoms_Z,
@@ -33,6 +57,7 @@ def generate_molecule_representation(
         print(f"Picture generated for one topology (Source: {sources})")
 
 def output_molecule_representations(computed_data: ComputedData):
+    """One topology picture per group of models with the same topology."""
     log_files = computed_data.metadata.log_files
 
     all_nuclear_repulsion_energy_from_xyz = computed_data.results.geometry.nuclear_repulsion_energy_from_xyz
@@ -70,6 +95,7 @@ def output_molecule_representations(computed_data: ComputedData):
 
 def output_MO_diagrams_clean(computed_data: ComputedData):
     
+    """Pictures of the requested orbitals of the reference (one set per spin if unrestricted)."""
     ref_id = computed_data.metadata.ref_log_file_idx
     output_dir = computed_data.metadata.output_dir
     
@@ -95,7 +121,7 @@ def output_MO_diagrams_clean(computed_data: ComputedData):
                 elements_3D_coords,
                 atom_pairs,
                 atoms_Z,
-                file_name=output_dir+f"img-log{ref_id}", 
+                file_name=output_dir+f"img-log{ref_id + 1}", 
                 labels=MO_data.alpha.labels
             )
             print("Generation of the image for Alpha MO Diagram done")
@@ -109,7 +135,7 @@ def output_MO_diagrams_clean(computed_data: ComputedData):
             elements_3D_coords,
             atom_pairs,
             atoms_Z,
-            file_name=output_dir+f"img-log{ref_id}", 
+            file_name=output_dir+f"img-log{ref_id + 1}", 
             labels=MO_data.beta.labels
         )
         print("Generation of the image for Beta MO Diagram done")
@@ -124,7 +150,7 @@ def output_MO_diagrams_clean(computed_data: ComputedData):
             elements_3D_coords,
             atom_pairs,
             atoms_Z,
-            file_name=output_dir+f"img-log{ref_id}", 
+            file_name=output_dir+f"img-log{ref_id + 1}", 
             labels=MO_data.restricted.labels
         )
         print("Generation of the image for restricted MO Diagram done")
@@ -132,6 +158,7 @@ def output_MO_diagrams_clean(computed_data: ComputedData):
 
 def output_MEP_maps(computed_data: ComputedData):
     
+    """MEP picture and colour bar of the reference, with the extrema markers and the colour range."""
     ref_id = computed_data.metadata.ref_log_file_idx
     output_dir = computed_data.metadata.output_dir
     
@@ -170,13 +197,17 @@ def output_MEP_maps(computed_data: ComputedData):
             elements_3D_coords,
             atom_pairs,
             atoms_Z,
-            file_name=output_dir+f"img-log{ref_id}"
+            file_name=output_dir+f"img-log{ref_id + 1}",
+            isovalue=computed_data.derived.wavefunction.MEP_maps.surface_isovalue or MEP_SURFACE_ISOVALUE,
+            extrema=computed_data.derived.wavefunction.MEP_maps.surface_extrema,
+            color_range=computed_data.derived.wavefunction.MEP_maps.color_range,
         )
         print("Generation of the MEP Map image done")
 
 
 def output_fukui_functions(computed_data: ComputedData):
     
+    """Pictures of f+ (SP plus), f- (SP minus) and of the dual descriptor, when computed."""
     ref_id = computed_data.metadata.ref_log_file_idx
     output_dir = computed_data.metadata.output_dir
     
@@ -283,6 +314,13 @@ def output_fukui_functions(computed_data: ComputedData):
 
 def output_es_absorption_and_CD_spectrum(computed_data: ComputedData, do_cd, do_abso):
     
+    """Absorption and CD spectra (pictures and text files) of every TD model.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    do_cd, do_abso : bool
+    """
     output_dir = computed_data.metadata.output_dir
     log_files = computed_data.metadata.log_files
     
@@ -344,6 +382,7 @@ def output_es_absorption_and_CD_spectrum(computed_data: ComputedData, do_cd, do_
 
 def output_es_EDD_OIF_DIP(computed_data: ComputedData):
     
+    """Density difference, overlap and dipole pictures of the selected states of every TD model."""
     ref_id = computed_data.metadata.ref_log_file_idx
     output_dir = computed_data.metadata.output_dir
     log_files = computed_data.metadata.log_files
@@ -443,6 +482,14 @@ def output_es_EDD_OIF_DIP(computed_data: ComputedData):
 
 def output_optimized_es_absorption_and_CD_spectrum(computed_data: ComputedData, config: Config, do_emi, do_CPL):
     
+    """Emission and CPL spectra (pictures and text files) of every optimized excited state.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    config : Config
+    do_emi, do_CPL : bool
+    """
     log_files = computed_data.metadata.log_files
     job_types = computed_data.comp_details.general.job_type
     output_dir = computed_data.metadata.output_dir
@@ -505,13 +552,13 @@ def output_optimized_es_absorption_and_CD_spectrum(computed_data: ComputedData, 
                 and len(CPL_spectrum) != 0
             ):
                 # Write both Emission and CPL spectra in text file to compare with experimental data
-                visu_txt.textfile_emiCD(xvalues, emi_spectrum, CPL_spectrum, file_name=output_dir+f"log{log_idx}") 
+                visu_txt.textfile_emiCD(xvalues, emi_spectrum, CPL_spectrum, file_name=output_dir+f"log{log_idx + 1}-") 
             # If no CPL write only Emission spectrum in text file to compare with experimental data
             else :
-                visu_txt.textfile_emiUV(xvalues, emi_spectrum, file_name=output_dir+f"log{log_idx}")   
+                visu_txt.textfile_emiUV(xvalues, emi_spectrum, file_name=output_dir+f"log{log_idx + 1}-")   
             
             # Plotting emiUV spectrum 
-            visu_plots.emiUV([emi_energy], [emi_osc], xvalues, emi_spectrum, file_name=output_dir+f"img-log{log_idx}")
+            visu_plots.emiUV([emi_energy], [emi_osc], xvalues, emi_spectrum, file_name=output_dir+f"img-log{log_idx + 1}")
             print(f"Generating Emission spectrum done for {log_file}.")            
         
         if (
@@ -520,12 +567,13 @@ def output_optimized_es_absorption_and_CD_spectrum(computed_data: ComputedData, 
             and len(CPL_spectrum) != 0
         ):
             # plot CPL spectrum 
-            visu_plots.emiCD([emi_energy], [emi_rotat], xvalues, CPL_spectrum, file_name=output_dir+f"img-log{log_idx}")
+            visu_plots.emiCD([emi_energy], [emi_rotat], xvalues, CPL_spectrum, file_name=output_dir+f"img-log{log_idx + 1}")
             print(f"CPL spectrum done for {log_file}.") 
 
 
 def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
     
+    """Density difference and dipole pictures of the emitting state of every optimized excited state."""
     ref_id = computed_data.metadata.ref_log_file_idx
     output_dir = computed_data.metadata.output_dir
     log_files = computed_data.metadata.log_files
@@ -598,7 +646,7 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
         # Using TD_output[0] instead of the index of the transition as TD_output only contain the transition of index emi_index here
         discretized_EDD_voxels = [TD_output[0][0]]
         
-        # file img-log<i>-emi-EDD-S<n>.png (T<n> for a triplet, <n> for other states), as in the report
+        # file img-log<i+1>-emi-EDD-S<n>.png (T<n> for a triplet, <n> for other states), as in the report
         print(f"Optimized Excited State EDD visualization in progress for the state {emi_state}")
         visu_mayavi.viz_EDD(
             discretized_EDD_voxels,
@@ -609,7 +657,7 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
             atom_pairs,
             atoms_Z,
             et_sym[emi_index], 
-            file_name=output_dir+f"img-log{log_idx}-emi", labels=[state_number(et_sym, emi_index)]
+            file_name=output_dir+f"img-log{log_idx + 1}-emi", labels=[state_number(et_sym, emi_index)]
         ) 
         
         if (emi_rotat != 0.0):
@@ -621,20 +669,23 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
                     atom_pairs,
                     atoms_Z,
                     et_sym[emi_index],
-                    file_name=output_dir+f"img-log{log_idx}-emi",
+                    file_name=output_dir+f"img-log{log_idx + 1}-emi",
                     labels=[state_number(et_sym, emi_index)]
                 )
                 print(f"Generating transition dipole images for selected transition: {emi_state}")
 
 
 def output_nto_images(computed_data: ComputedData, config: Config):
+    """Pictures of the NTO pairs (hole and electron, green and gold) of the selected states,
+    computed one pair at a time on the common grid (calc_orb.nto_pair).
+    """
     ref = computed_data.derived.excited_states.nto_reference
     if ref is None or config.output.verbosity == "text":
         return
     for log_idx, states in enumerate(computed_data.derived.excited_states.nto_pairs):
         et_sym = computed_data.results.excited_states.et_sym[log_idx]
         for state in states or []:
-            # file img-log<i>-NTO-S<n>-pair<p> (T<n> for a triplet), as in the report
+            # file img-log<i+1>-NTO-S<n>-pair<p> (T<n> for a triplet), as in the report
             label = state_label(et_sym, state["state"] - 1) if et_sym else str(state["state"])
             for pair_idx, pair in enumerate(state["pairs"], 1):
                 prefix = (computed_data.metadata.output_dir +
@@ -653,8 +704,32 @@ def output_nto_images(computed_data: ComputedData, config: Config):
                                    reduction=1)  # already reduced by nto_pair
 
 
+def output_soc_pictures(computed_data: ComputedData):
+    """Jablonski-Perrin diagram of every model with spin-orbit couplings (ORCA dosoc), and the
+    phosphorescence spectrum of the optimized triplets."""
+    output_dir = computed_data.metadata.output_dir
+    for log_idx, soc in enumerate(computed_data.results.excited_states.soc):
+        if soc and soc["socme"]:
+            visu_plots.jablonski(soc, file_name=output_dir + f"img-log{log_idx + 1}")
+    for log_idx, phospho in enumerate(computed_data.derived.optimized_excited_states.phosphorescence):
+        if phospho:
+            visu_plots.phospho([s["energy"] for s in phospho["sublevels"]],
+                               [s["fosc"] for s in phospho["sublevels"]],
+                               phospho["xvalues"], phospho["spectrum"],
+                               file_name=output_dir + f"img-log{log_idx + 1}")
+
+
 def generate_visualization(computed_data: ComputedData, config: Config, compute_flags: ComputeFlags):
     
+    """Draw all the pictures of the report.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    config : Config
+    compute_flags : ComputeFlags
+        Pictures to draw.
+    """
     print("\n=================================================================")
     print(" Visualization")
     print("=================================================================")
@@ -697,4 +772,8 @@ def generate_visualization(computed_data: ComputedData, config: Config, compute_
     # Generate the outputs for the transitions of the optimized excited states
     if compute_flags.compute_optimized_es_transitions_and_EDD :
         output_optimized_es_EDD_DIP(computed_data, config)
+
+    # Spin-orbit couplings and phosphorescence (ORCA dosoc)
+    if compute_flags.compute_es_transitions_and_EDD or compute_flags.compute_optimized_es_emi_spectrum:
+        output_soc_pictures(computed_data)
     

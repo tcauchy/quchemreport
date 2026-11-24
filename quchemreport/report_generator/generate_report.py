@@ -1,3 +1,19 @@
+"""The PDF report: a LaTeX document built with pylatex and compiled with pdflatex.
+
+generate_report fills the document section by section, in this order: log files, molecule,
+computational details, wavefunction (orbitals, MEP, population analysis), frequencies,
+reactivity (conceptual DFT, Fukui functions), excited states, optimized excited states, other
+topologies, atomic coordinates. Each ``fill_*_section`` function creates a section and calls
+``render_*`` functions, one per table or figure; a section that receives nothing is left out.
+Only the parts asked in ``output.include`` are rendered, and the verbosity changes what is shown:
+``full`` (all tables and pictures), ``si`` (supporting information, plain layout, fewer
+pictures) and ``text`` (no grid pictures).
+
+The pictures are read from the output folder with the names written by
+visualization_engine.generate_visualization (``img-log<k>-...png``, see docs/architecture.md);
+a missing picture is simply not shown.
+"""
+
 import json
 import os
 import re
@@ -12,13 +28,14 @@ from quchemreport.config.config import Config, OutputInclude
 from quchemreport.utility_services.computed_data import ComputedData, config_logfile
 from quchemreport.utility_services.log_data import functional_label
 from quchemreport.utility_services.parameters import THRESHOLD_IR_INTENSITIES
-from quchemreport.utility_services.units import nm_to_wnb, Eh_to_Kcal_mol
+from quchemreport.utility_services.units import nm_to_wnb, Eh_to_Kcal_mol, a0_to_A
 from quchemreport.utility_services.naming import spin_letter, state_label, state_number
 
 # TODO : NEED TO THINK ABOUT THE MAX VALUE
 MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE = 15
 
 def add_row_filter(tab, l, expr='N/A'):
+    """Add the row l to the table unless its value (l[1], or every value of a tuple) is expr ('N/A')."""
     if (
         ((l[1].__class__ != tuple) and (l[1] != expr)) # case 1
         or ((l[1].__class__ == tuple) and np.all([elt != expr for elt in l[1]])) # case 2
@@ -29,6 +46,19 @@ def add_row_filter(tab, l, expr='N/A'):
 
 
 def figure_one_col(doc, nomPng, taillePng="7cm", caption="Figure", escapeCaption=True):
+    """Add a centred figure with one picture.
+
+    Parameters
+    ----------
+    doc : pylatex container
+    nomPng : str
+        Picture file, relative to the output folder.
+    taillePng : str, optional
+        LaTeX width.
+    caption : str, optional
+    escapeCaption : bool, optional
+        Escape the LaTeX special characters of the caption.
+    """
     if escapeCaption:
         caption = escape_latex(caption)
     
@@ -42,6 +72,7 @@ def figure_one_col(doc, nomPng, taillePng="7cm", caption="Figure", escapeCaption
 
 
 def figure_two_col(doc, nomPng, nomPng2, taillePng="7cm", caption="Figure", escapeCaption=True):
+    """Add a centred figure with two pictures side by side (parameters as figure_one_col)."""
     if escapeCaption:
         caption = escape_latex(caption)
     
@@ -56,6 +87,7 @@ def figure_two_col(doc, nomPng, nomPng2, taillePng="7cm", caption="Figure", esca
 
 
 def sanitize_filename(name: str) -> str:
+    """Name usable in a file name: characters other than letters, digits, _ and - become _."""
     return re.sub(r'[^A-Za-z0-9_-]+', '_', name)
 
 
@@ -68,6 +100,17 @@ def generate_empty_document(report_type):
     
     ### create document and import needed packages
     
+    """Empty LaTeX document with the packages, page style and title of the report.
+
+    Parameters
+    ----------
+    report_type : str
+        full, si or text (the full report has the coloured layout).
+
+    Returns
+    -------
+    pylatex Document
+    """
     doc = Document(documentclass="article",font_size='small',geometry_options='a4paper, left=15mm, right=15mm, top=15mm, bottom=15mm')
     # packages
     doc.packages.append(NoEscape(r'\usepackage{xcolor}'))
@@ -118,10 +161,17 @@ def generate_empty_document(report_type):
 
 
 def render_ref_molecule_representation(section, output_dir, computed_data: ComputedData):
+    """Topology picture of the reference, at the top of the molecule section.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     ref_id = computed_data.metadata.ref_log_file_idx
     log_file = computed_data.metadata.log_files[ref_id]
     
-    nomPng = f"img-log{ref_id+1}-TOPOLOGY.png"
+    nomPng = f"img-log{ref_id + 1}-TOPOLOGY.png"
     
     if ( not os.path.isfile(output_dir + nomPng) ):
         print(f"{nomPng} not found. Molecule representation for the reference can not be added to the report.\n")
@@ -134,6 +184,24 @@ def render_ref_molecule_representation(section, output_dir, computed_data: Compu
 
 def render_grouped_values_with_logs(table, label, values, log_files, ref_id, table_col):
     # Regrouper les logs par valeurs équivalentes
+    """Table row of a computational detail, grouping the log files by value.
+
+    A single value is written alone; several values are written in bold with their log
+    files, the value of the reference first.
+
+    Parameters
+    ----------
+    table : pylatex table
+    label : str
+        First column.
+    values : list
+        One value per model (None values are skipped).
+    log_files : list of str
+    ref_id : int
+        Index of the reference model.
+    table_col : int
+        Number of columns of the table.
+    """
     grouped = []  # liste de tuples (valeur, [logs])
 
     for val, log in zip(values, log_files):
@@ -191,11 +259,19 @@ def imaginary_frequencies(freqs):
 
 
 def format_imaginary(freqs):
+    """Imaginary frequencies as text: ``1157.2i, 830.2i``."""
     return ", ".join("%.1fi" % abs(f) for f in freqs)
 
 
 def quality_warnings(computed_data):
-    """Warnings on the nature of the structures: non-converged optimization, imaginary frequencies."""
+    """Warnings on the nature of the structures: optimizations that did not converge and
+    imaginary frequencies (the structure is not a minimum).
+
+    Returns
+    -------
+    list of str
+        One sentence per problem, with its log file.
+    """
     warnings = []
     log_files = computed_data.metadata.log_files
     for i, log in enumerate(log_files):
@@ -210,6 +286,7 @@ def quality_warnings(computed_data):
 
 
 def fill_logfiles_details_section(doc, computed_data, config: Config):
+    """First section: table of the log files with their types, and the quality warnings."""
     with doc.create(Section('LOGFILES DETAILS')) :
         
         ref_id = computed_data.metadata.ref_log_file_idx
@@ -252,6 +329,15 @@ def fill_logfiles_details_section(doc, computed_data, config: Config):
 
 def render_molecule_identification(section, computed_data: ComputedData, designated_name, report_type):
     
+    """Table identifying the molecule: name, formula, charge, multiplicity, mass, InChI...
+    (``molecule_identification`` tags).
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     with section.create(LongTable("p{0.2\\textwidth} p{0.8\\textwidth}")) as mol_table:
 
         ref_id = computed_data.metadata.ref_log_file_idx
@@ -308,6 +394,18 @@ def render_molecule_identification(section, computed_data: ComputedData, designa
 
 
 def render_atomic_coordinates_table(doc, atoms, atoms_Z, log_file: str, table_title: str):
+    """Table of Cartesian coordinates (Angstrom).
+
+    Parameters
+    ----------
+    doc : pylatex container
+    atoms : list of float
+        Flat coordinates.
+    atoms_Z : list of int
+    log_file : str
+        Source written under the title.
+    table_title : str
+    """
     doc.append(NoEscape(r'\begin{footnotesize}'))
     doc.append(NoEscape(r'\begin{center}'))
 
@@ -345,12 +443,20 @@ def render_atomic_coordinates_table(doc, atoms, atoms_Z, log_file: str, table_ti
     doc.append(NoEscape(r'\end{footnotesize}'))
 
 def coordinates_title(computed_data, log_idx):
+    """Title of a coordinates table, which says when the optimization did not converge."""
     if computed_data.results.geometry.OPT_DONE[log_idx] is False:
         return "Table. Last cartesian atomic coordinates in Angstroms (optimization NOT converged)"
     return "Table. Converged cartesian atomic coordinates in Angstroms"
 
 
 def render_ref_atomic_coordinates(section, computed_data: ComputedData):
+    """Coordinates of the reference in the molecule section, for molecules with fewer than MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE atoms (larger ones at the end of the report).
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     ref_id = computed_data.metadata.ref_log_file_idx
     atoms = computed_data.results.geometry.elements_3D_coords[ref_id]
     atoms_Z = computed_data.molecule.atoms_Z[ref_id]
@@ -380,6 +486,7 @@ def render_ref_atomic_coordinates(section, computed_data: ComputedData):
     return True
 
 def fill_molecule_section(doc, output_dir, computed_data: ComputedData, designated_name, report_type, config_output: OutputInclude):
+    """Molecule section: topology picture, identification and coordinates of the reference."""
     section = Section('MOLECULE')
     
     added_ref_molecule = False
@@ -406,6 +513,10 @@ def fill_molecule_section(doc, output_dir, computed_data: ComputedData, designat
 
 def fill_computational_details_section(doc, computed_data: ComputedData):
     
+    """Computational details section: program and versions, method, functional (with its
+    dispersion correction), basis set, closed shell, grid, solvent, convergence targets,
+    grouped by value over the log files (render_grouped_values_with_logs).
+    """
     with doc.create(Section('COMPUTATIONAL DETAILS')) :
         
         ref_id = computed_data.metadata.ref_log_file_idx
@@ -529,6 +640,7 @@ def fill_computational_details_section(doc, computed_data: ComputedData):
 
 
 def serialize_energies_data(total_energy, homo_ind, MO_energies, MO_labels, MO_indexes):
+    """Canonical JSON of the energy data of a model, to group models with the same table."""
     return json.dumps({
         "total_energy": total_energy,
         "homo_ind": homo_ind,
@@ -539,6 +651,7 @@ def serialize_energies_data(total_energy, homo_ind, MO_energies, MO_labels, MO_i
 
 
 def render_energies_table(doc, computed_data: ComputedData, log_indexes):
+    """Table of the total energy and of the requested orbital energies, for a group of models with the same values."""
     log_files = computed_data.metadata.log_files
     i_log = log_indexes[0]
     
@@ -612,6 +725,13 @@ def render_energies_table(doc, computed_data: ComputedData, log_indexes):
 
 
 def render_energies(section, computed_data: ComputedData):
+    """Energy tables of all the models (one table per group of identical values).
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     n_logs = len(computed_data.results.wavefunction.MO_energies)
     ref_id = computed_data.metadata.ref_log_file_idx
     
@@ -671,6 +791,23 @@ def render_energies(section, computed_data: ComputedData):
 def render_ref_MO_diagram(section, output_dir, computed_data: ComputedData, report_type):
     
     # figure with MO not available in text report type
+    """Pictures of the requested orbitals of the reference (two views when the molecule needs them).
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     if report_type == 'text':
         return False
     
@@ -696,8 +833,8 @@ def render_ref_MO_diagram(section, output_dir, computed_data: ComputedData, repo
             label_alpha = labels_alpha[i]
             label_beta = labels_beta[i]
 
-            nomPng_alpha = f"img-log{ref_id}-MO-{label_alpha}.png"
-            nomPng_beta  = f"img-log{ref_id}-MO-{label_beta}.png"
+            nomPng_alpha = f"img-log{ref_id + 1}-MO-{label_alpha}.png"
+            nomPng_beta  = f"img-log{ref_id + 1}-MO-{label_beta}.png"
 
             path_alpha = os.path.join(output_dir, nomPng_alpha)
             path_beta = os.path.join(output_dir, nomPng_beta)
@@ -717,8 +854,8 @@ def render_ref_MO_diagram(section, output_dir, computed_data: ComputedData, repo
     else:
         labels = MO_labels[0]
         for label in labels:
-            nomPng = f"img-log{ref_id}-MO-{label}.png"
-            nomPng2 = f"img-log{ref_id}-MO-{label}_cam2.png"
+            nomPng = f"img-log{ref_id + 1}-MO-{label}.png"
+            nomPng2 = f"img-log{ref_id + 1}-MO-{label}_cam2.png"
             
             path1 = os.path.join(output_dir, nomPng)
             path2 = os.path.join(output_dir, nomPng2)
@@ -735,34 +872,116 @@ def render_ref_MO_diagram(section, output_dir, computed_data: ComputedData, repo
 
 def render_ref_MEP_maps(section, output_dir, computed_data: ComputedData, report_type):
     # MEP map figures is only printed in full type report 
+    """MEP figure of the reference (picture, colour bar, caption giving the surface and the
+    colour scale) followed by the table of its extrema (full reports only).
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     if report_type != "full":
         return False
     
     ref_id = computed_data.metadata.ref_log_file_idx
+    maps = computed_data.derived.wavefunction.MEP_maps
+    isovalue = maps.surface_isovalue or 0.002
+    extrema = maps.surface_extrema or []
     
-    # MEP figures: fixed colour scale (comparison between compounds) and automatic scale
-    # (both from visu_mayavi.viz_Potential, first camera)
-    nomFixed = f"img-log{ref_id}-MEP_fixed.png"
-    nomAuto = f"img-log{ref_id}-MEP.png"
-    surface = "Molecular Electrostatic Potential (MEP) mapped on the electron density isosurface (0.002 e-/bohr3). "
-    fixed = ("red regions correspond to MEP values below -0.01 a.u. (electron-rich), blue regions to values "
-             "above +0.01 a.u. (electron-poor) and green regions to values close to zero; this fixed scale "
-             "allows comparisons between compounds.")
-    auto = ("the colour scale is set automatically from the minimum (red) to the maximum (blue) "
-            "of the MEP on the surface.")
-    if os.path.isfile(output_dir + nomFixed):
-        if os.path.isfile(output_dir + nomAuto):
-            figure_two_col(section, nomFixed, nomAuto,
-                           caption=surface + "Left: " + fixed + " Right: same view, " + auto)
-        else:
-            figure_one_col(section, nomFixed, taillePng="10cm", caption=surface + fixed[0].upper() + fixed[1:])
+    # MEP figure (visu_mayavi.viz_Potential): fixed, symmetric colour scale, with its colour bar
+    nomPng = f"img-log{ref_id + 1}-MEP.png"
+    nomBar = f"img-log{ref_id + 1}-MEP_colorbar.png"
+    color_range = maps.color_range
+    caption = ("Molecular Electrostatic Potential (MEP) mapped on the electron density isosurface "
+               f"({isovalue:g} e-/bohr3). Red: negative MEP (electron-rich regions), blue: positive MEP "
+               "(electron-poor regions), green: close to zero")
+    if color_range:
+        caption += (f"; fixed colour scale from {-color_range * Eh_to_Kcal_mol:.0f} to "
+                    f"+{color_range * Eh_to_Kcal_mol:.0f} kcal/mol ({-color_range:g} to +{color_range:g} a.u.), "
+                    "the same for the compounds of the same charge")
+    caption += ". "
+    if extrema:
+        caption += ("Numbered spheres: local minima (white) and maxima (black) of the MEP on this surface "
+                    "(see the table below; those on the hidden side are not visible).")
+    if os.path.isfile(output_dir + nomPng):
+        section.append(NoEscape(r'\begin{figure}[H]'))
+        section.append(NoEscape(r'\begin{center}'))
+        section.append(NoEscape(r'\includegraphics[width=10cm]{' + nomPng + '}'))
+        if os.path.isfile(output_dir + nomBar):
+            section.append(NoEscape(r'\\'))
+            section.append(NoEscape(r'\includegraphics[width=9cm]{' + nomBar + '}'))
+        section.append(NoEscape(r'\end{center}'))
+        section.append(NoEscape(r'\vspace{-5mm}'))
+        section.append(NoEscape(r'\caption{' + escape_latex(caption) + '}'))
+        section.append(NoEscape(r'\end{figure}'))
+        render_MEP_extrema_table(section, computed_data, isovalue, extrema)
         return True
 
     return False
 
 
+def render_MEP_extrema_table(section, computed_data: ComputedData, isovalue, extrema):
+    """Table of the local minima and maxima of the MEP on the surface, numbered as the markers
+    of the picture: type, value in kcal/mol and a.u., nearest atom and its distance;
+    V_S,min and V_S,max in bold.
+
+    Parameters
+    ----------
+    section : pylatex Section
+    computed_data : ComputedData
+    isovalue : float
+        Density of the surface (e-/bohr3).
+    extrema : list of dict
+        mep_surface.mep_surface_extrema.
+    """
+    if not extrema:
+        return
+    ref_id = computed_data.metadata.ref_log_file_idx
+    atoms_Z = computed_data.molecule.atoms_Z[ref_id]
+    log_file = computed_data.metadata.log_files[ref_id]
+    table_spec = "p{0.06\\textwidth}p{0.12\\textwidth}p{0.16\\textwidth}p{0.16\\textwidth}p{0.2\\textwidth}p{0.16\\textwidth}"
+    with section.create(LongTable(table_spec)) as table:
+        table.add_row([MultiColumn(6, align=NoEscape('p{0.95\\textwidth}'), data=NoEscape(
+            f"Table. Local minima and maxima of the MEP on the {isovalue:g} e-/bohr3 isosurface "
+            r"($V_\mathrm{S,min}$ and $V_\mathrm{S,max}$, the most negative and most positive values, in bold). "
+            f"Source: {escape_latex(log_file)}"))])
+        table.add_hline()
+        table.add_row(["N°", "Type", NoEscape(r"$V_\mathrm{S}$ (kcal/mol)"), NoEscape(r"$V_\mathrm{S}$ (a.u.)"),
+                       "Nearest atom (N°)", "Distance (Angstrom)"])
+        table.add_hline()
+        first = {"min": extrema[0] if extrema[0]["kind"] == "min" else None,
+                 "max": next((e for e in extrema if e["kind"] == "max"), None)}
+        for number, ext in enumerate(extrema, start=1):
+            atom = f"{PeriodicTable().element[atoms_Z[ext['atom']]]} (N°{ext['atom'] + 1})"
+            kcal = f"{ext['value'] * Eh_to_Kcal_mol:+.1f}"
+            au = f"{ext['value']:+.4f}"
+            if ext is first[ext["kind"]]:
+                kcal, au = bold(kcal), bold(au)
+            table.add_row([str(number), "minimum" if ext["kind"] == "min" else "maximum", kcal, au,
+                           atom, f"{ext['distance'] * a0_to_A:.2f}"])
+        table.add_hline()
+
+
 def render_ref_population_analysis(section, computed_data: ComputedData, report_type):
     # Only display when report type is full
+    """Statistics of the atomic charges of the reference and table of the atoms whose charge
+    deviates by more than one standard deviation (full reports only).
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     if report_type != "full":
         return False
 
@@ -861,6 +1080,7 @@ def render_ref_population_analysis(section, computed_data: ComputedData, report_
 
 def fill_wavefunction_section(doc, output_dir, computed_data: ComputedData, report_type, config_output: OutputInclude):
     
+    """Wavefunction section: energies, orbitals, MEP map, population analysis."""
     section = Section('WAVEFUNCTION')
     
     added_energies = False
@@ -895,6 +1115,13 @@ def fill_wavefunction_section(doc, output_dir, computed_data: ComputedData, repo
 
 def render_thermo_data(section, computed_data: ComputedData):
     
+    """Table of the thermochemistry of each frequency calculation: imaginary frequencies, zero-point correction, sums of the electronic energy with the zero-point and thermal energies, enthalpy, Gibbs free energy and entropy at the temperature of the calculation.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     ref_id = computed_data.metadata.ref_log_file_idx
     log_files = computed_data.metadata.log_files
     all_temperatures = computed_data.comp_details.freq.temperature
@@ -991,6 +1218,13 @@ def render_thermo_data(section, computed_data: ComputedData):
 
 def render_IR_spectrum(section, computed_data: ComputedData):
     
+    """Table of the IR vibrations more intense than THRESHOLD_IR_INTENSITIES (km/mol): frequency, intensity, symmetry.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     ref_id = computed_data.metadata.ref_log_file_idx
     log_files = computed_data.metadata.log_files
     all_vibrational_int = computed_data.results.freq.vibrational_int
@@ -1072,6 +1306,7 @@ def render_IR_spectrum(section, computed_data: ComputedData):
 
 def fill_frequencies_section(doc, computed_data: ComputedData, config_output: OutputInclude):
     
+    """Frequencies section: thermochemistry and IR data."""
     section = Section('FREQUENCIES')
     
     added_thermo_data = False
@@ -1093,6 +1328,13 @@ def fill_frequencies_section(doc, computed_data: ComputedData, config_output: Ou
 
 def render_CDFT_global_indices(section, computed_data: ComputedData, report_type):
     # CDFT Indices table only in full report
+    """Table of the conceptual DFT global indices (A, I, electronegativity, hardness, electrophilicity, DeltaN).
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     if report_type != 'full': 
         return False
     
@@ -1138,6 +1380,9 @@ def render_CDFT_global_indices(section, computed_data: ComputedData, report_type
 
 
 def render_fukui_table(doc, atoms_Z, fplus, fminus, fdual, title):
+    """Table of condensed Fukui functions (f+, f-, dual descriptor) per atom, for one charge
+    model (Mulliken or Hirshfeld).
+    """
     has_data = len(fplus) > 0 or len(fminus) > 0
     if not has_data:
         return
@@ -1191,6 +1436,13 @@ def render_fukui_table(doc, atoms_Z, fplus, fminus, fdual, title):
 
 def render_condensed_fukui_functions(section, computed_data: ComputedData):
 
+    """Tables of condensed Fukui functions for the available charge models.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     def safe(val): return val if val is not None else [] 
     
     ref_id = computed_data.metadata.ref_log_file_idx
@@ -1236,25 +1488,49 @@ def render_condensed_fukui_functions(section, computed_data: ComputedData):
 
 def render_fukui_functions(section, output_dir, computed_data: ComputedData, report_type):
     # Figures of that are only printed in full type report 
+    """Pictures of the Fukui functions and of the dual descriptor: F+ and F- side by side
+    when the molecule needs only one view, otherwise each with its two views.
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     if report_type != 'full':
         return False
     
     isContentAdded = False
         
-    # figures of Fukui functions if calculated
-    nomPng = "img-fukui-SP_plus.png"
-    nomPng2 = "img-fukui-SP_plus_cam2.png"                                                        
-    nomPng3 = "img-fukui-SP_minus.png"
-    nomPng4 = "img-fukui-SP_minus_cam2.png"                                                        
-    if (os.path.isfile(output_dir + nomPng)) :
-        if (os.path.isfile(output_dir + nomPng2)) :
-            figure_two_col(section, nomPng, nomPng2, caption="Representation of the F+ function from two points of view. The Blue color indicate the most electrophilic regions.")
-            if (os.path.isfile(output_dir + nomPng3)) :
-                if (os.path.isfile(output_dir + nomPng4)) :
-                    figure_two_col(section, nomPng3, nomPng4, caption="Representation of the F- function from two points of view. The Blue color indicate the most nucleophilic regions.")
-            isContentAdded = True
-        elif (os.path.isfile(output_dir + nomPng3)) :
-            figure_two_col(section, nomPng, nomPng3, caption="Representation of the electrophilic (left) and nucleophilic (right) fukui functions.")
+    # Figures of the Fukui functions if calculated. The second view (_cam2) only exists for the
+    # molecules that need one (visualization_engine.camera): F+ and F- then each get two views,
+    # otherwise they are shown side by side.
+    plus, plus2 = "img-fukui-SP_plus.png", "img-fukui-SP_plus_cam2.png"
+    minus, minus2 = "img-fukui-SP_minus.png", "img-fukui-SP_minus_cam2.png"
+    has = lambda name: os.path.isfile(output_dir + name)
+    caption_plus = "the F+ function; blue regions are the most electrophilic."
+    caption_minus = "the F- function; blue regions are the most nucleophilic."
+    if has(plus) and has(minus) and not (has(plus2) or has(minus2)):
+        figure_two_col(section, plus, minus,
+                       caption="Representation of the electrophilic (left) and nucleophilic (right) Fukui functions.")
+        isContentAdded = True
+    else:
+        for name, name2, caption in ((plus, plus2, caption_plus), (minus, minus2, caption_minus)):
+            if not has(name):
+                continue
+            if has(name2):
+                figure_two_col(section, name, name2, caption="Representation from two points of view of " + caption)
+            else:
+                figure_one_col(section, name, caption="Representation of " + caption)
             isContentAdded = True
     
     nomPng = "img-Fdual.png"
@@ -1271,6 +1547,7 @@ def render_fukui_functions(section, output_dir, computed_data: ComputedData, rep
 
 def fill_reactivity_section(doc, output_dir, computed_data: ComputedData, report_type, config_output: OutputInclude):
     
+    """Reactivity section: conceptual DFT indices, condensed and 3D Fukui functions."""
     section = Section('REACTIVITY')
     
     added_CDFT_global_indices = False
@@ -1297,6 +1574,10 @@ def fill_reactivity_section(doc, output_dir, computed_data: ComputedData, report
 
 
 def build_CIS_string(transitions, homo_ind, filter_threshold=5):
+    """Main excitations of a state as text, e.g. ``8->9 (95)``: orbital numbers (1-based,
+    with a/b for unrestricted calculations) and weight in % (C^2 x 100), for the weights of
+    at least filter_threshold %.
+    """
     CIS = ""
     for ST in transitions:
         coeff = int(ST[2] ** 2 * 100)
@@ -1315,6 +1596,16 @@ def build_CIS_string(transitions, homo_ind, filter_threshold=5):
 
 def render_excited_state_transitions_table(doc, computed_data: ComputedData, log_idx, is_optimized=False, indices=None, report_type="full", title=""):
 
+    """Table of the selected excited states of a model: symmetry, wavelength (nm) and
+    wavenumber (cm-1), oscillator and rotatory strengths, main excitations in %
+    (build_CIS_string), and charge-transfer indices in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     log_files = computed_data.metadata.log_files[log_idx]
     homo_ind = computed_data.results.wavefunction.homo_indexes[log_idx]
     et_energies = computed_data.results.excited_states.et_energies[log_idx]
@@ -1446,6 +1737,13 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
 
 def render_es_transitions(section, computed_data: ComputedData, report_type):
 
+    """Transition tables of every TD model.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     log_files = computed_data.metadata.log_files
     job_types = computed_data.comp_details.general.job_type
     isContentAdded = False
@@ -1472,6 +1770,23 @@ def render_es_transitions(section, computed_data: ComputedData, report_type):
 
 def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: ComputedData, report_type):
     
+    """Absorption and CD spectrum pictures of every TD model.
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     log_files = computed_data.metadata.log_files
     job_types = computed_data.comp_details.general.job_type
     isContentAdded = False
@@ -1488,7 +1803,7 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
         content_added = False
             
         # UV visible Absorption plots
-        imgNameAbso = f"img-log{log_idx+1}-UV-Abso-Spectrum.png"
+        imgNameAbso = f"img-log{log_idx + 1}-UV-Abso-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameAbso)) :
             figure_one_col(section, imgNameAbso, taillePng="10cm", 
                 caption=f"Calculated UV visible Absorption spectrum with a gaussian broadening (FWHM = 3000 cm-1). (Source: {log_file})"
@@ -1497,7 +1812,7 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
             
         
         # Circular dischroism plots
-        imgNameCD= f"img-log{log_idx+1}-UV-CD-Spectrum.png"
+        imgNameCD= f"img-log{log_idx + 1}-UV-CD-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameCD)) :
             figure_one_col(section, imgNameCD, taillePng="10cm", 
                 caption=f"Calculated Circular Dichroism spectrum with a gaussian broadening (FWHM = 3000 cm-1. (Source: {log_file})"
@@ -1515,6 +1830,23 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
 
 def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type):
     # figures not available in text report type
+    """Density difference pictures of the selected states of every TD model.
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     if report_type == 'text':
         return False
 
@@ -1542,8 +1874,8 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
             letter = spin_letter(et_sym[k]) if known else ""
             number = state_number(et_sym, k) if known else k + 1
             state = f"{letter}{number}" if letter else f"state {number}"
-            nomPng = f"img-log{log_idx+1}-EDD-{letter}{number}.png"
-            nomPng_cam2 = f"img-log{log_idx+1}-EDD-{letter}{number}_cam2.png"
+            nomPng = f"img-log{log_idx + 1}-EDD-{letter}{number}.png"
+            nomPng_cam2 = f"img-log{log_idx + 1}-EDD-{letter}{number}_cam2.png"
             
             if (os.path.isfile(output_dir + nomPng)) :
                 if (os.path.isfile(output_dir + nomPng_cam2)) :
@@ -1572,6 +1904,23 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
 
 
 def render_es_nto(section, output_dir, computed_data, report_type):
+    """NTO pair pictures of the selected states, with their weights and the completeness of the amplitudes.
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     added = False
     for log_idx, states in enumerate(computed_data.derived.excited_states.nto_pairs):
         et_sym = computed_data.results.excited_states.et_sym[log_idx]
@@ -1600,7 +1949,7 @@ def render_es_nto(section, output_dir, computed_data, report_type):
                 caption = (f"NTO {name}, pair {pair_idx}, {pair['spin']} spin, "
                            f"weight {100 * pair['weight']:.2f}%. Hole (left), electron (right). "
                            "Green and gold show opposite orbital phases; their absolute signs are arbitrary.")
-                prefix = f"img-log{log_idx+1}-NTO-{label}-pair{pair_idx}"
+                prefix = f"img-log{log_idx + 1}-NTO-{label}-pair{pair_idx}"
                 hole, electron = prefix + "-MO-hole.png", prefix + "-MO-electron.png"
                 if report_type != "text" and os.path.isfile(output_dir + hole) and os.path.isfile(output_dir + electron):
                     figure_two_col(section, hole, electron, caption=caption)
@@ -1610,6 +1959,7 @@ def render_es_nto(section, output_dir, computed_data, report_type):
 
 
 def fill_excited_states_section(doc, output_dir, computed_data: ComputedData, report_type, config_output: OutputInclude):
+    """Excited states section: transitions, spectra, density differences and NTO."""
     section = Section('EXCITED STATES')
 
     added_es_transition = False
@@ -1634,17 +1984,137 @@ def fill_excited_states_section(doc, output_dir, computed_data: ComputedData, re
 
     if config_output.excited_states.natural_transition_orbitals.enabled:
         added_es_nto = render_es_nto(section, output_dir, computed_data, report_type)
+    # Spin-orbit couplings (ORCA dosoc), with the transitions
+    added_es_soc = False
+    if config_output.excited_states.transitions:
+        added_es_soc = render_es_soc(section, output_dir, computed_data, report_type)
     
     if (
         added_es_transition
         or added_es_abso_and_cd
         or added_es_EDD
         or added_es_nto
+        or added_es_soc
     ):
         doc.append(section)
 
 
+# Spin-orbit coupling tables: triplets (rows) and singlets (columns) shown at most
+SOC_TABLE_TRIPLETS = 6
+SOC_TABLE_SINGLETS = 3
+
+
+def render_soc_couplings(section, output_dir, computed_data: ComputedData, log_idx, report_type):
+    """Spin-orbit couplings of one model (ORCA ``dosoc``): table of |<Tn|H_SO|Sm>| (cm-1) for
+    the lowest triplets and singlets, with the energies of the states, and the
+    Jablonski-Perrin diagram (``img-log<k>-Jablonski.png``, full reports).
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
+    soc = computed_data.results.excited_states.soc[log_idx]
+    if not soc or not soc["socme"]:
+        return False
+    log_file = computed_data.metadata.log_files[log_idx]
+    singlets = [{"number": 0, "energy": 0.0}] + soc["singlets"][:SOC_TABLE_SINGLETS]
+    triplets = soc["triplets"][:SOC_TABLE_TRIPLETS]
+    ncol = 1 + len(singlets)
+    # Fixed column widths: a title cell wider than the columns would widen the last one
+    width = 0.16 + 0.13 * len(singlets)
+    spec = "p{0.16\\textwidth}" + "p{0.13\\textwidth}" * len(singlets)
+    with section.create(LongTable(spec)) as table:
+        table.add_row([MultiColumn(ncol, align=NoEscape(f'p{{{width:.2f}\\textwidth}}'), data=NoEscape(
+            r"Table. Spin-orbit coupling matrix elements $|\langle T_n|H_{SO}|S_m\rangle|$ (cm$^{-1}$), "
+            r"$\sqrt{\sum_{M_S}|\langle T_n,M_S|H_{SO}|S_m\rangle|^2}$; state energies in eV. "
+            f"Source: {escape_latex(log_file)}"))])
+        table.add_hline()
+        table.add_row([""] + [NoEscape(f"S$_{s['number']}$ ({s['energy'] / 8065.544:.2f})") for s in singlets])
+        table.add_hline()
+        for t in triplets:
+            row = [NoEscape(f"T$_{t['number']}$ ({t['energy'] / 8065.544:.2f})")]
+            for s_ in singlets:
+                value = soc["socme"].get((t["number"], s_["number"]))
+                row.append("" if value is None else f"{value:.1f}")
+            table.add_row(row)
+        table.add_hline()
+    picture = f"img-log{log_idx + 1}-Jablonski.png"
+    if report_type == "full" and os.path.isfile(output_dir + picture):
+        figure_one_col(section, picture, taillePng="11cm", caption=(
+            "Jablonski-Perrin diagram of the vertical singlet and triplet states at the geometry of "
+            f"{log_file}, with the spin-orbit couplings |<T|H_SO|S>| (cm-1) of the intersystem "
+            "crossings from S1 (triplets below S1 + 0.3 eV) and from T1 to S0."))
+    return True
+
+
+def render_es_soc(section, output_dir, computed_data: ComputedData, report_type):
+    """Spin-orbit couplings of every TD model that has them (render_soc_couplings).
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
+    added = False
+    for log_idx, jobs in enumerate(computed_data.comp_details.general.job_type):
+        if jobs and "td" in jobs:
+            added = render_soc_couplings(section, output_dir, computed_data, log_idx, report_type) or added
+    return added
+
+
+def render_phosphorescence(section, output_dir, computed_data: ComputedData, report_type):
+    """Phosphorescence of the optimized triplets with SOC (compute.compute_phosphorescence):
+    table of the sublevels (energy, wavelength, oscillator strength, radiative rate), mean
+    radiative rate and radiative lifetime, spectrum, and the spin-orbit couplings at the
+    optimized geometry.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
+    added = False
+    data = computed_data.derived.optimized_excited_states.phosphorescence
+    for log_idx, phospho in enumerate(data):
+        if not phospho:
+            continue
+        log_file = computed_data.metadata.log_files[log_idx]
+        with section.create(LongTable("p{0.14\\textwidth}p{0.12\\textwidth}p{0.1\\textwidth}p{0.14\\textwidth}p{0.14\\textwidth}")) as table:
+            table.add_row([MultiColumn(5, align=NoEscape('p{0.72\\textwidth}'), data=NoEscape(
+                f"Table. Phosphorescence from the sublevels of {phospho['state']} at its optimized "
+                "geometry (vertical emission, spin-orbit coupled states). Radiative rates "
+                r"$k_r = f\,\tilde\nu^2/1.499$ s$^{-1}$ (Strickler-Berg). "
+                f"Source: {escape_latex(log_file)}"))])
+            table.add_hline()
+            table.add_row(["Sublevel", NoEscape(r"cm$^{-1}$"), "nm", "f", NoEscape(r"$k_r$ (s$^{-1}$)")])
+            table.add_hline()
+            for k, sub in enumerate(phospho["sublevels"], 1):
+                table.add_row([f"{phospho['state']} ({k})", f"{sub['energy']:.0f}", f"{1e7 / sub['energy']:.0f}",
+                               f"{sub['fosc']:.2e}", f"{sub['k_r']:.3g}"])
+            table.add_hline()
+            lifetime = phospho["lifetime"]
+            table.add_row([MultiColumn(5, align=NoEscape('p{0.72\\textwidth}'), data=NoEscape(
+                f"Mean radiative rate (sublevels in thermal equilibrium): {phospho['k_r']:.3g} s$^{{-1}}$; "
+                + (f"radiative lifetime {lifetime * 1e3:.3g} ms" if lifetime else "no radiative decay")))])
+        picture = f"img-log{log_idx + 1}-Phospho-Spectrum.png"
+        if os.path.isfile(output_dir + picture):
+            figure_one_col(section, picture, taillePng="10cm", caption=(
+                "Calculated phosphorescence spectrum: one Gaussian band (FWHM = 3000 cm-1) per sublevel "
+                "of the triplet, weighted by its oscillator strength."))
+        render_soc_couplings(section, output_dir, computed_data, log_idx, report_type)
+        added = True
+    return added
+
+
 def render_optimized_es_transitions(section, computed_data: ComputedData, report_type, config: Config):
+    """Table of the emitting state of every optimized excited state.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     log_files = computed_data.metadata.log_files
     job_types = computed_data.comp_details.general.job_type
 
@@ -1682,6 +2152,23 @@ def render_optimized_es_transitions(section, computed_data: ComputedData, report
 
 def render_optimized_es_emission_spectrum(section, output_dir, computed_data: ComputedData, report_type):
     
+    """Emission spectrum pictures.
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     log_files = computed_data.metadata.log_files
     job_types = computed_data.comp_details.general.job_type
     
@@ -1695,7 +2182,7 @@ def render_optimized_es_emission_spectrum(section, output_dir, computed_data: Co
             continue
         
         # UV visible Emission plots
-        imgNamePng = f"img-log{log_idx}-UV-Emi-Spectrum.png"
+        imgNamePng = f"img-log{log_idx + 1}-UV-Emi-Spectrum.png"
         if (not os.path.isfile(output_dir + imgNamePng)) :
             continue
         
@@ -1711,6 +2198,23 @@ def render_optimized_es_emission_spectrum(section, output_dir, computed_data: Co
 
 def render_optimized_es_CPL_spectrum(section, output_dir, computed_data: ComputedData, report_type):
     
+    """CPL spectrum pictures.
+
+    Parameters
+    ----------
+    section : pylatex Section
+    output_dir : str
+        Folder of the pictures (with the final separator).
+    computed_data : ComputedData
+    report_type : str
+        full, si or text: most pictures are only shown in full reports.
+
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     log_files = computed_data.metadata.log_files
     job_types = computed_data.comp_details.general.job_type
     
@@ -1723,7 +2227,7 @@ def render_optimized_es_CPL_spectrum(section, output_dir, computed_data: Compute
         if not any("_es" in jb for jb in jobs):
             continue
     
-        imgNamePng = f"img-log{log_idx}-UV-CD-Emi-Spectrum.png"
+        imgNamePng = f"img-log{log_idx + 1}-UV-CD-Emi-Spectrum.png"
         if (not os.path.isfile(output_dir + imgNamePng)) :
             continue
         
@@ -1738,6 +2242,13 @@ def render_optimized_es_CPL_spectrum(section, output_dir, computed_data: Compute
 
 
 def render_optimized_es_EDD(section, output_dir, computed_data: ComputedData, config: Config, report_type):
+    """Density difference pictures of the emitting states.
+
+    Returns
+    -------
+    bool
+        Whether something was added to the section.
+    """
     if report_type == 'text':
         return False
     
@@ -1762,8 +2273,8 @@ def render_optimized_es_EDD(section, output_dir, computed_data: ComputedData, co
         state = f"{letter}{number}" if letter else f"state {number}"
         
         # figure with EDD for emission (named by output_optimized_es_EDD_DIP)
-        imgNamePng = f"img-log{log_idx}-emi-EDD-{letter}{number}.png" 
-        imgNamePng2 = f"img-log{log_idx}-emi-EDD-{letter}{number}_cam2.png" 
+        imgNamePng = f"img-log{log_idx + 1}-emi-EDD-{letter}{number}.png" 
+        imgNamePng2 = f"img-log{log_idx + 1}-emi-EDD-{letter}{number}_cam2.png" 
         if (not os.path.isfile(output_dir + imgNamePng)) :
             continue
         
@@ -1788,6 +2299,7 @@ def render_optimized_es_EDD(section, output_dir, computed_data: ComputedData, co
 
 def fill_optimized_excited_states_section(doc, output_dir, computed_data: ComputedData, report_type, config: Config, config_output: OutputInclude):
     
+    """Optimized excited states section: emitting state, emission and CPL spectra, density differences."""
     section = Section('OPTIMIZED EXCITED STATES')
     
     added_optimized_es_transitions = False
@@ -1802,6 +2314,9 @@ def fill_optimized_excited_states_section(doc, output_dir, computed_data: Comput
     # Render optimized excited states Emission Spectrum for each available TD logfile
     if config_output.optimized_excited_states.emission_spectrum:
         added_optimized_es_emission_spectrum = render_optimized_es_emission_spectrum(section, output_dir, computed_data, report_type)
+        # Phosphorescence of the optimized triplets with SOC (ORCA dosoc)
+        added_optimized_es_emission_spectrum = render_phosphorescence(
+            section, output_dir, computed_data, report_type) or added_optimized_es_emission_spectrum
         
     # Render optimized excited states CPL Spectrum for each available TD logfile
     if config_output.optimized_excited_states.CPL_spectrum:
@@ -1821,6 +2336,7 @@ def fill_optimized_excited_states_section(doc, output_dir, computed_data: Comput
 
 
 def fill_additional_molecule_representations_section(doc, computed_data: ComputedData):
+    """Section of the topology pictures of the models whose topology differs from the reference."""
     ref_id = computed_data.metadata.ref_log_file_idx
     output_dir = computed_data.metadata.output_dir
     log_files = computed_data.metadata.log_files
@@ -1848,7 +2364,7 @@ def fill_additional_molecule_representations_section(doc, computed_data: Compute
             if (log_idx == ref_id):
                 continue
             
-            nomPng = f"img-log{log_idx+1}-TOPOLOGY.png"
+            nomPng = f"img-log{log_idx + 1}-TOPOLOGY.png"
             
             if ( not os.path.isfile(output_dir + nomPng) ):
                 print(f"{nomPng} not found. Molecule representation for the reference can not be added to the report.\n")
@@ -1859,6 +2375,7 @@ def fill_additional_molecule_representations_section(doc, computed_data: Compute
 
 
 def render_atomic_coordinates(doc, computed_data: ComputedData):
+    """Coordinate tables of the models not shown in the molecule section."""
     ref_id = computed_data.metadata.ref_log_file_idx
     
     for i in range(len(computed_data.results.geometry.elements_3D_coords)):
@@ -1890,6 +2407,7 @@ def render_atomic_coordinates(doc, computed_data: ComputedData):
 
 
 def fill_atomic_coordinates_section(doc, computed_data: ComputedData):
+    """Final section of the atomic coordinates."""
     ref_id = computed_data.metadata.ref_log_file_idx
     all_atoms = computed_data.results.geometry.elements_3D_coords
     all_atoms_Z = computed_data.molecule.atoms_Z
@@ -1929,6 +2447,17 @@ def render_report_document(reportFile, output_dir, doc, mode):
     # OK sans SVG doc.generate_pdf(rapFile, clean_tex=False)
     # pas de chance !! doc.generate_pdf(rapFile, clean_tex=False,compiler="pdflatex  --shell-escape")
     
+    """Write the .tex file and compile it with pdflatex in the output folder.
+
+    Parameters
+    ----------
+    reportFile : str
+        Path of the report without extension (``.tex`` and ``.pdf`` are added).
+    output_dir : str
+    doc : pylatex Document
+    mode : str
+        ``"clean"``: hide the pdflatex output and remove the auxiliary files.
+    """
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
     
@@ -1974,6 +2503,17 @@ def render_report_document(reportFile, output_dir, doc, mode):
 
 def generate_report(computed_data: ComputedData, config:Config, mode="unset"):
     
+    """Build and compile the report.
+
+    The report is ``<output_path>/<molecule_designated_name>/<name>_<verbosity>_report.txt.pdf``.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    config : Config
+    mode : str, optional
+        Compilation mode; forced to ``"clean"`` unless ``logging.level`` is debug.
+    """
     print("\n=================================================================")
     print(" Report Generation")
     print("=================================================================")

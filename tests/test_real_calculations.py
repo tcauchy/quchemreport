@@ -242,6 +242,9 @@ def test_h2co_full_report(solver):
     for pattern in ("MO-homo", "MEP", "fukui-SP_plus", "fukui-SP_minus", "Fdual", "emi-EDD-S1", "emi-EDD-T1"):
         assert report.images(pattern), pattern
     assert len(report.images("-EDD-T")) >= 5
+    # Planar molecule: a single view per picture (visualization_engine.camera)
+    assert not [f for f in report.files if "_cam2" in f]
+    assert "fukui functions" in report.tex.lower()
 
 
 def _td_without_amplitudes():
@@ -333,6 +336,7 @@ def test_ecp_full_report(path, solver):
                         **{"output.include.wavefunction.MEP_maps": True})
     assert report.returncode == 0, report.output[-3000:]
     assert report.images("MEP") and "MEP map skipped" not in report.output
+    assert "Local minima and maxima of the MEP" in report.tex and "extrema skipped" not in report.output
 
 
 # ------------------------------------------------- MEP against Gaussian (defects 1, 10, 11)
@@ -394,7 +398,60 @@ def test_mo_energies_below_the_printed_format():
     assert qb.occupations(model, len(energies))[0].sum() == 62
 
 
-# ------------------------------------------------------- excited states of ORCA
+# ------------------------------------------------------- MEP extrema on the molecular surface
+
+def test_surface_extrema_on_a_sphere():
+    """V = z on a sphere: one minimum at the south pole, one maximum at the north pole."""
+    from quchemreport.data_enrichment import mep_surface
+    X, Y, Z = np.mgrid[-4:4.01:0.1, -4:4.01:0.1, -4:4.01:0.1]
+    rho = np.exp(-(X ** 2 + Y ** 2 + Z ** 2))
+    extrema = mep_surface.mep_surface_extrema(rho, Z.copy(), X, Y, Z, [[0.0, 0.0, 0.0]], isovalue=np.exp(-4.0))
+    assert [e["kind"] for e in extrema] == ["min", "max"]
+    assert np.allclose(extrema[0]["position"], [0, 0, -2], atol=0.05)
+    assert np.allclose(extrema[1]["position"], [0, 0, 2], atol=0.05)
+    assert np.isclose(extrema[1]["value"], 2.0, atol=0.01) and np.isclose(extrema[1]["distance"], 2.0, atol=0.05)
+    assert np.allclose(extrema[1]["direction"], [0, 0, 1], atol=0.03)
+
+
+def test_mep_color_range():
+    """Calibrated fixed scale: +-0.05 a.u. for neutral molecules, +-0.20 a.u. per unit charge."""
+    from quchemreport.data_enrichment import mep_surface
+    assert mep_surface.color_range(0) == mep_surface.color_range(None) == 0.05
+    assert mep_surface.color_range(1) == mep_surface.color_range(-1) == 0.20
+    assert mep_surface.color_range(-3) == 0.60
+
+
+# Gaussian 09 cubegen (potential=SCF) at the extrema found at step 0.1 (kcal/mol): kind, nearest
+# atom (index), value. Our values differ by less than 0.4 kcal/mol at this step.
+SURFACE_EXTREMA = {
+    "gaussian/h2co/OPT.log": [("min", 1, -29.71), ("min", 1, -29.71), ("max", 3, 24.01)],
+    # sigma-hole on Br (max on the C-Br axis) inside a negative belt (3 minima, C3v)
+    "gaussian/ch3x_mep/SP_CH3Br.log": [("min", 1, -15.09), ("min", 1, -15.09), ("min", 1, -15.08),
+                                       ("max", None, 20.53), ("max", None, 20.53), ("max", None, 20.54),
+                                       ("max", 1, 7.00)],
+}
+
+
+@pytest.mark.parametrize("path", SURFACE_EXTREMA)
+def test_mep_surface_extrema(path):
+    """MEP extrema on the 0.001 e-/bohr3 isosurface against Gaussian (cubegen at the same points)."""
+    from quchemreport.data_enrichment import mep_surface
+    from quchemreport.utility_services.units import a0_to_A, Eh_to_Kcal_mol
+    model = read_steps(path)[-1]
+    with contextlib.redirect_stdout(io.StringIO()):
+        rho, mep, X, Y, Z, _ = calc_orb.Potential(model, grid_step=0.1, nproc=4)
+    coords = np.asarray(model.results.geometry.elements_3D_coords).reshape(-1, 3) / a0_to_A
+    extrema = mep_surface.mep_surface_extrema(rho, mep, X, Y, Z, coords)
+    expected = SURFACE_EXTREMA[path]
+    assert len(extrema) == len(expected)
+    for ext, (kind, atom, value) in zip(extrema, expected):
+        assert ext["kind"] == kind
+        if atom is not None:
+            assert ext["atom"] == atom
+        assert abs(ext["value"] * Eh_to_Kcal_mol - value) < 0.5
+
+
+# ------------------------------------------------------------- ORCA excited state energies
 
 def test_orca_excited_state_energies_in_cm1():
     """The cclib JSON gives ORCA's excited state energies in hartree (dict of spectra); they were
@@ -404,3 +461,40 @@ def test_orca_excited_state_energies_in_cm1():
     orca = read_steps("orca6/h2co/TD.out", "orca")[-1].results.excited_states.et_energies
     assert isinstance(orca, list) and 30000 < orca[0] < 36000
     assert abs(orca[0] - gaussian[0]) / gaussian[0] < 0.02
+
+
+
+# ------------------------------------------------------- spin-orbit coupling (ORCA dosoc)
+
+def test_orca_soc_reader():
+    """SOC of H2CO (ORCA 6.1, TD-DFT dosoc at the ground state geometry): El-Sayed rule,
+    <T1|H_SO|S1> = 0 (both n-pi*) and <T2|H_SO|S1> about 42 cm-1; three T1 sublevels."""
+    from quchemreport.parser_engine.orca_soc import read_orca_soc
+    from tests.datafiles import log
+    soc = read_orca_soc(log("orca6/h2co/TD_SOC.out"))
+    assert len(soc["singlets"]) == 5 and len(soc["triplets"]) == 5
+    assert abs(soc["socme"][(1, 0)] - 58.81) < 0.05
+    assert soc["socme"][(1, 1)] < 0.05 and abs(soc["socme"][(2, 1)] - 41.78) < 0.05
+    sublevels = [s for s in soc["states"][1:] if s["components"][0][1] == "T1"]
+    assert len(sublevels) == 3 and all(abs(s["energy"] - 26849.5) < 1 for s in sublevels)
+    assert soc["states"][0]["components"][0][1] == "S0"
+    assert read_orca_soc(log("orca6/h2co/TD.out")) is None
+
+
+def test_phosphorescence_from_optimized_triplet(tmp_path):
+    """Acetone T1 optimized with dosoc (ORCA 6.1): emission at about 531 nm, one bright sublevel,
+    mean radiative rate about 95 s-1 (radiative lifetime about 10 ms); Jablonski-Perrin picture."""
+    from quchemreport.data_enrichment import compute
+    from quchemreport.utility_services.computed_data import init_computed_data
+    from quchemreport.visualization_engine import visu_plots
+    model = read_steps("orca6/acetone_soc/OPT_ET1_SOC.out", "orca")[-1]
+    computed = init_computed_data(1)
+    with contextlib.redirect_stdout(io.StringIO()):
+        compute.extract_simple_data([model], model, computed)
+        compute.compute_phosphorescence(computed, 0, 1)
+    phospho = computed.derived.optimized_excited_states.phosphorescence[0]
+    assert phospho["state"] == "T1" and len(phospho["sublevels"]) == 3
+    assert abs(1e7 / phospho["sublevels"][0]["energy"] - 531) < 2
+    assert 80 < phospho["k_r"] < 110 and 8e-3 < phospho["lifetime"] < 13e-3
+    visu_plots.jablonski(computed.results.excited_states.soc[0], file_name=str(tmp_path / "img"))
+    assert (tmp_path / "img-Jablonski.png").is_file()

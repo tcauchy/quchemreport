@@ -9,7 +9,7 @@ path = log("gaussian/h2co/OPT.log")      # uncompressed copy in a temporary fold
 Z, xyz = geometry("phenanthrene")         # geometries/phenanthrene.xyz
 ```
 
-**Size budget: 2 MB for the whole folder** (1.7 MB in November 2026). Use the smallest
+**Size budget: 2 MB for the whole folder** (1.8 MB in November 2026). Use the smallest
 molecule and basis set that shows the behaviour to test, and avoid `pop=full` / MO printing on
 large systems.
 
@@ -33,7 +33,8 @@ large systems.
 | `orca6/maxiter` | ORCA 6.1 | H2O optimisation stopped at MaxIter (not converged, but "terminated normally") |
 | `orca6/functionals` | ORCA 6.1 | H2O single points: PBE0, B3LYP-D3BJ, B3LYP-D4, ωB97X-D3, ωB97X-V, CAM-B3LYP, B2PLYP, TPSSh |
 | `orca6/ch3i` | ORCA 6.1 | CH3I with the def2 ECP on iodine (28 core electrons) |
-| `geometries` | — | coordinates only (phenanthrene), for tests that do not need a log |
+| `orca6/acetone_soc` | ORCA 6.1 | acetone, T1 optimization with spin-orbit coupling (`dosoc true`): T1 sublevels, phosphorescence (PBE0/def2-SVP) |
+| `geometries` | — | coordinates only, for tests that do not need a log: phenanthrene, and `mol01`-`mol10` (last geometries of real calculations, renamed by number: helicenes, spiro compounds, folded adducts, a cobalt complex, a 408-atom cage...) for the camera views (`tests/test_camera.py`) |
 | `mep_reference` | Gaussian 09 D.01 | exact MEP (`cubegen 8 potential=SCF`, fine grid) at 400 random points of the 0.002 a.u. iso-density surface, for `gaussian/h2co/OPT.log`, the two `gaussian/ch3i_mep` logs and the two `gaussian/ch3x_mep` logs (checkpoints of these jobs); `make_mep_reference.py JOB.fchk OUT.txt label` makes them (g09 environment needed) |
 
 All ORCA inputs print the basis set and the MO coefficients (`Print[P_Basis] 2`, `Print[P_MOs] 1`),

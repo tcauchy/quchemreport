@@ -1,3 +1,16 @@
+"""Reading of the log files of quantum chemistry programs into LogData models.
+
+A log file may contain several calculations (Gaussian Link1 jobs, ORCA compound jobs): it is
+first split into steps, written to a temporary folder, and each completed step is read on its
+own. A step is read with cclib (all the results) and Open Babel (molecule: formula,
+connectivity, InChI, SMILES), then copied, section by section, into a LogData model
+(utility_services.log_data). Values that cclib does not give for a log are left to None.
+
+Gaussian and ORCA are supported; GAMESS and NWChem are accepted without splitting and untested.
+A few values are read directly in the log, because cclib does not give them: the sum of
+electronic and thermal energies, and the functional of ORCA calculations.
+"""
+
 import os
 import sys
 import traceback
@@ -12,6 +25,7 @@ import sklearn.preprocessing
 
 from quchemreport.config.config import Config
 from quchemreport.utility_services.log_data import LogData
+from quchemreport.parser_engine.orca_soc import read_orca_soc
 
 # constants
 CstBohr2Ang = 0.52917721092
@@ -19,13 +33,30 @@ CstHartree2eV = 27.21138505
 CstHartree2cm1 = 219474.6313708
 scanlog_version = "1.0.2"
 
-""" Scanlog Exception class.
-"""
 class ScanlogException(Exception):
+    """Error while reading a log file (message for the user)."""
     pass
 
 
 def split_logfile_gaussian(logfile, log_storage_path, verbose):
+    """Split a Gaussian log file into its completed steps (one per "Normal termination").
+
+    Each step is written as ``<name>_step_<k>.log`` in log_storage_path, with the Gaussian
+    copyright line that cclib needs to recognize the program. A last step without normal
+    termination (interrupted job) is ignored with a warning.
+
+    Parameters
+    ----------
+    logfile : str
+    log_storage_path : str
+        Folder of the step files.
+    verbose : bool
+
+    Returns
+    -------
+    list of str
+        Paths of the step files (empty when no step terminated normally).
+    """
     log_files = []
     
     TERM = "Normal termination"
@@ -79,6 +110,7 @@ def split_logfile_gaussian(logfile, log_storage_path, verbose):
 
 
 def split_logfile_gamess(logfile, log_storage_path, verbose):
+    """One step per "TERMINATED NORMALLY" of a GAMESS log, without splitting (untested)."""
     log_files = []
     
     TERM = "TERMINATED NORMALLY"
@@ -96,6 +128,23 @@ def split_logfile_gamess(logfile, log_storage_path, verbose):
 
 
 def split_logfile_orca(logfile, log_storage_path, verbose):
+    """Split an ORCA log file into its completed steps (one per "Timings for individual
+    modules").
+
+    Each step is written as ``<name>_step_<k>.log`` with the ORCA header and the program
+    version, so that cclib recognizes it. A last step without termination is ignored with a
+    warning.
+
+    Parameters
+    ----------
+    logfile : str
+    log_storage_path : str
+    verbose : bool
+
+    Returns
+    -------
+    list of str
+    """
     log_files = []
     
     TERM = "Timings for individual modules:"
@@ -154,6 +203,26 @@ def split_logfile_orca(logfile, log_storage_path, verbose):
 
 
 def split_logfile(logfile, solver, log_storage_path="", verbose=False):
+    """Split a log file into its completed steps, according to the program.
+
+    Parameters
+    ----------
+    logfile : str
+    solver : str
+        Program: gaussian, orca (gamess, nwchem: untested).
+    log_storage_path : str, optional
+    verbose : bool, optional
+
+    Returns
+    -------
+    list of str
+        Paths of the step files.
+
+    Raises
+    ------
+    ScanlogException
+        Unsupported program, or the file could not be split.
+    """
     try:
         if verbose:
             print(">>> SOLVER:", solver)
@@ -188,9 +257,23 @@ def split_logfile(logfile, solver, log_storage_path="", verbose=False):
         raise ScanlogException("File splitting failed.")
 
 
-"""Redefining nuclear_repulsion_energy with 5 decimals of precision on coords.
-"""
 def nuclear_repulsion_energy(data, slice_id=-1):
+    """Nuclear repulsion energy of a geometry of a cclib result, in hartree.
+
+    The coordinates are rounded to 1e-5 Angstrom, so that the same geometry written by two
+    calculations gives the same value: it identifies the conformer in the conformity tests
+    (conformity.same_nre).
+
+    Parameters
+    ----------
+    data : cclib ccData
+    slice_id : int, optional
+        Geometry of the calculation (last one by default; 0 for the starting geometry).
+
+    Returns
+    -------
+    float
+    """
     nre = 0.0
     for i in range(data.natom):
         ri = np.array([float("%.5f" % k) for k in data.atomcoords[slice_id][i]])
@@ -203,10 +286,9 @@ def nuclear_repulsion_energy(data, slice_id=-1):
     return float("%.5f" % (nre * CstBohr2Ang))
 
 
-"""Utility function to simplify data recording from dict or other object.
-"""
 def _try_key_insertion(res_json, key, obj, obj_path=[], nullable=True):
     # case : dictionary
+    """Former helper to copy a value into a dict (unused)."""
     if obj.__class__ == dict :
         try:
             if obj_path:
@@ -232,6 +314,28 @@ def try_update_value(
     dict_path: list = None,
     nullable: bool = True
 ):
+    """Copy a value, or a value of a nested dict, into an attribute of a LogData model.
+
+    Parameters
+    ----------
+    data_model : LogData
+    attr_path : str
+        Dotted path of the attribute, e.g. ``"comp_details.general.functional"``.
+    obj_or_dict : object or dict
+        The value, or the dict (cclib JSON, cclib metadata) that contains it.
+    dict_path : list of str, optional
+        Keys of the value in obj_or_dict; the value is obj_or_dict itself when omitted.
+    nullable : bool, optional
+        When True (default), a missing key or a value refused by the model leaves the
+        attribute unchanged; when False, it raises.
+
+    Raises
+    ------
+    AttributeError
+        attr_path is not an attribute of the model (programming error).
+    ScanlogException, ValueError
+        Missing or invalid value with nullable False.
+    """
     try:
         # Extract value from nested dict if dict_path is provided
         value = obj_or_dict
@@ -268,6 +372,10 @@ def try_update_value(
 
 
 def general_param_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``comp_details.general``: program and version, methods, functional and dispersion,
+    basis set (pickled with its MD5 hash, to compare basis sets), atomic orbitals, closed or
+    open shell, solvent, SCF targets and core electrons.
+    """
     all_unique_theory = np.array([])
     try:
         all_unique_theory = np.unique(data.metadata['methods'])
@@ -337,15 +445,18 @@ def general_param_subsection(data_model: LogData, data_json, data, obdata):
 
 
 def geometry_param_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``comp_details.geometry`` (convergence targets of the optimization)."""
     try_update_value(data_model,"comp_details.geometry.geometric_targets", data_json, ['optimization', 'geometric targets'])
 
 
 def freq_param_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``comp_details.freq`` (temperature, anharmonicity)."""
     try_update_value(data_model, "comp_details.freq.temperature", data_json, ['properties', 'temperature'])
     try_update_value(data_model, "comp_details.freq.anharmonicity", data_json, ['vibrations', 'anharmonicity constants'])
 
 
 def td_param_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``comp_details.excited_states`` (number of excited states)."""
     et_states = data_json.get('transitions', {}).get('electronic transitions', None)
     if et_states:
         data_model.comp_details.excited_states.nb_et_states = len(et_states)
@@ -355,6 +466,15 @@ def td_param_subsection(data_model: LogData, data_json, data, obdata):
 
 
 def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``results.wavefunction``: orbitals, total energy, charges, moments, SCF values.
+
+    The MO energies, symmetries and coefficients are kept up to the first virtual orbital
+    above 10 eV, and at least 30 virtual orbitals above the HOMO, to keep the model small.
+    Energies that Gaussian cannot print (``**********``, e.g. the 1s orbital of iodine in an
+    all-electron basis set) are NaN in cclib: they become -inf, so that the energies stay
+    usable. When the MO data are incomplete, a warning is printed and no grid can be made
+    from this log.
+    """
     try_update_value(data_model, "results.wavefunction.homo_indexes", data_json, ['properties', 'orbitals', 'homos'])
     try_update_value(data_model, "results.wavefunction.MO_energies", data_json, ['properties', 'orbitals', 'energies'])
     try_update_value(data_model, "results.wavefunction.MO_sym", data_json, ['properties', 'orbitals', 'molecular orbital symmetry'])
@@ -429,6 +549,9 @@ def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata
 
 
 def geom_results_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``results.geometry``: nuclear repulsion energy, optimization status, coordinates
+    (Angstrom) and geometric convergence values.
+    """
     try_update_value(data_model, "results.geometry.nuclear_repulsion_energy_from_xyz", nuclear_repulsion_energy(data))
     try_update_value(data_model, "results.geometry.OPT_DONE", data_json, ['optimization', 'done'])
     try_update_value(data_model, "results.geometry.elements_3D_coords", data_json, ['atoms', 'coords', '3d'])
@@ -436,7 +559,19 @@ def geom_results_subsection(data_model: LogData, data_json, data, obdata):
 
 
 def _electronic_thermal_energy(logfile):
-    """Last 'sum of electronic and thermal energies' of a Gaussian or ORCA log, in hartree."""
+    """Last sum of electronic and thermal energies of a Gaussian or ORCA log, in hartree.
+
+    Read in the log because cclib does not give it.
+
+    Parameters
+    ----------
+    logfile : str
+
+    Returns
+    -------
+    float or None
+        None when the log has no thermochemistry.
+    """
     import re
     if not logfile or not os.path.isfile(logfile):
         return None
@@ -465,9 +600,25 @@ _ORCA_FUNCTIONAL_NAMES = {name.lower() for name in (
 
 
 def _orca_functional(logfile, keywords=None):
-    """ORCA functional (cclib does not read it): the functional keyword of the input when
-    there is one, followed by the definition printed by ORCA (exchange, correlation, HF exchange
-    and DFT scalings), used to compare the levels of theory. None if the log has no DFT block."""
+    """Functional of an ORCA calculation, read in the log (cclib does not give it for ORCA).
+
+    The functional keyword of the input is followed by the definition printed by ORCA
+    (exchange, correlation, HF exchange and DFT scalings, range separation, perturbative
+    correction), so that two calculations with the same keyword but modified parameters
+    are seen as different levels of theory.
+
+    Parameters
+    ----------
+    logfile : str
+    keywords : list of str, optional
+        Keywords of the input line (cclib metadata["keywords"]).
+
+    Returns
+    -------
+    str or None
+        e.g. ``"B3LYP (Exchange B88, Correlation LYP, HF exchange 0.2, ...)"``; None
+        when the log has no DFT block.
+    """
     import re
     if not logfile or not os.path.isfile(logfile):
         return None
@@ -489,6 +640,7 @@ def _orca_functional(logfile, keywords=None):
         return None
 
     def value(text):
+        """Number formatted with %g, or the text unchanged."""
         try:
             return "%g" % float(text)
         except ValueError:
@@ -502,6 +654,10 @@ def _orca_functional(logfile, keywords=None):
 
 
 def freq_results_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``results.freq``: thermochemistry (entropy, enthalpy, free energy, zero-point
+    correction), frequencies, IR and Raman intensities, symmetries, displacements,
+    polarizabilities, anharmonicity.
+    """
     try_update_value(data_model, "results.freq.entropy", data_json, ['properties', 'entropy'])
     try:
         try_update_value(data_model, "results.freq.entropy", float("%.9f" % data_json['properties']['entropy']))
@@ -531,6 +687,9 @@ def freq_results_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "results.freq.vibrational_raman", data_json, ['vibrations', 'intensities', 'raman'])
 
 def td_results_subsection(data_model: LogData, data_json, data, obdata):
+    """Fill ``results.excited_states``: energies, oscillator and rotatory strengths, symmetries,
+    excitation amplitudes and transition dipoles of the excited states.
+    """
     # Energies in cm-1 from the cclib attribute etenergies, for every program. The cclib JSON
     # gives ORCA's energies as a dict of spectra in hartree (e.g. "ABSORPTION SPECTRUM VIA
     # TRANSITION ELECTRIC DIPOLE MOMENTS"), which were then read as cm-1: until 24/11/2026 the
@@ -551,6 +710,15 @@ def td_results_subsection(data_model: LogData, data_json, data, obdata):
 
 
 def molecule_section(data_model: LogData, data_json, data, obdata, verbose=False):
+    """Fill ``molecule``: chirality, valences, InChI, SMILES, monoisotopic mass and bonds (Open
+    Babel), then formula, numbers of atoms, charge, multiplicity, atomic numbers and the
+    starting geometry and energy (cclib).
+
+    Raises
+    ------
+    ScanlogException
+        Open Babel could not read the molecule.
+    """
     if "isChiral" in dir(obdata.OBMol) and "GetValence" in obdata.atoms[0].OBAtom:
         # openbabel 2
         data_model.molecule.chirality = obdata.OBMol.IsChiral()
@@ -610,6 +778,7 @@ def molecule_section(data_model: LogData, data_json, data, obdata, verbose=False
 
 def parameters_section(data_model: LogData, data_json, data, obdata):
     # subsection : General parameters
+    """Fill the ``comp_details`` section (computational details)."""
     general_param_subsection(data_model, data_json, data, obdata)
     # subsection : Geometry 
     geometry_param_subsection(data_model, data_json, data, obdata)
@@ -621,6 +790,7 @@ def parameters_section(data_model: LogData, data_json, data, obdata):
 
 def results_section(data_model: LogData, data_json, data, obdata):
     # subsection : Wavefunction
+    """Fill the ``results`` section."""
     wavefunction_results_subsection(data_model, data_json, data, obdata)
     # subsection : Geometry
     geom_results_subsection(data_model, data_json, data, obdata)
@@ -631,6 +801,9 @@ def results_section(data_model: LogData, data_json, data, obdata):
 
 
 def metadata_section(logfile, data_model: LogData, data_json, data, obdata):
+    """Fill the ``metadata`` section: parser version, name of the step file, and whether the
+    log has MO coefficients (``discretizable``).
+    """
     data_model.metadata.parser_version = scanlog_version
     data_model.metadata.log_file = os.path.basename(logfile)
     data_model.metadata.discretizable = False
@@ -639,6 +812,22 @@ def metadata_section(logfile, data_model: LogData, data_json, data, obdata):
 
 
 def full_report(logfile, data_json, data, obdata, verbose=False):
+    """Build the LogData model of one step from its cclib and Open Babel data.
+
+    Parameters
+    ----------
+    logfile : str
+        Step file.
+    data_json : dict
+        cclib result as JSON (cclib writejson).
+    data : cclib ccData
+    obdata : pybel.Molecule
+    verbose : bool, optional
+
+    Returns
+    -------
+    LogData
+    """
     data_model = LogData()
     
     # section : Molecule
@@ -655,6 +844,21 @@ def full_report(logfile, data_json, data, obdata, verbose=False):
 
 def logfile_to_obj(logfile, verbose=False):
     # reading with cclib
+    """Read one step file into a LogData model.
+
+    cclib reads the log; Open Babel reads the last geometry (from cclib's XYZ). The sum of
+    electronic and thermal energies and, for ORCA, the functional are read in the log.
+
+    Parameters
+    ----------
+    logfile : str
+        Step file (split_logfile).
+    verbose : bool, optional
+
+    Returns
+    -------
+    LogData
+    """
     data = cclib.parser.ccopen(logfile).parse()
     data.quchemreport_logfile = os.path.basename(logfile)  # for messages only
     data_json = json.loads(data.writejson())
@@ -670,12 +874,16 @@ def logfile_to_obj(logfile, verbose=False):
     general = data_model.comp_details.general
     if general.functional is None and general.package == "orca":
         general.functional = _orca_functional(logfile, data.metadata.get("keywords"))
+    # Spin-orbit coupling: not read by cclib (see parser_engine.orca_soc)
+    if general.package == "orca":
+        data_model.results.excited_states.soc = read_orca_soc(logfile)
     return data_model
 
 
-"""Check if logfile is archivable and candidate for a new entry.
-"""       
 def quality_check_lvl2(data_model: LogData, solver, verbose=False):
+    """Mark the model as archivable when it has a total energy (``metadata.archivable``; kept
+    from the database version of the parser, not used by the report).
+    """
     qual = "True"
     qual2 = "True"
     
@@ -705,6 +913,34 @@ def quality_check_lvl2(data_model: LogData, solver, verbose=False):
 
 
 def process_logfile(config: Config, logfile, logfile_idx, log_storage_path="", verbose=False):
+    """Split and read one log file of the YAML file.
+
+    Every step of the file gets the type given in the YAML file (a note is printed when
+    the file has several steps) and the index of its YAML entry (``metadata.config_idx``).
+
+    Parameters
+    ----------
+    config : Config
+    logfile : str
+    logfile_idx : int
+        Index of the log file in ``config.logfiles``.
+    log_storage_path : str, optional
+        Folder of the step files.
+    verbose : bool, optional
+
+    Returns
+    -------
+    log_files : list of str
+        Step files.
+    data_list : list of LogData
+        One model per step.
+
+    Raises
+    ------
+    ScanlogException
+        No completed calculation in the file (message naming the missing termination
+        line), or a step that cclib or Open Babel cannot read.
+    """
     solver = config.common_solver
     
     log_files = split_logfile(
@@ -752,6 +988,20 @@ def process_logfile(config: Config, logfile, logfile_idx, log_storage_path="", v
 
 
 def process_logfile_list(config: Config, log_storage_path="", verbose=False):    
+    """Split and read all the log files of the YAML file, in their order.
+
+    Parameters
+    ----------
+    config : Config
+    log_storage_path : str, optional
+    verbose : bool, optional
+
+    Returns
+    -------
+    log_files : list of str
+    data_list : list of LogData
+        The parsed models, several per multi-step log file.
+    """
     logfilelist = [str(l.path.resolve()) for l in config.logfiles]
     
     data_list = []

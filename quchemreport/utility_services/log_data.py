@@ -1,3 +1,14 @@
+"""LogData: the data read from one calculation step (pydantic model).
+
+scanlog.logfile_to_obj fills one LogData per step of a log file, from cclib and Open Babel.
+The model has four sections: ``metadata`` (file, parser), ``molecule`` (composition, charge,
+connectivity, starting geometry), ``comp_details`` (program, method, basis set, options) and
+``results`` (wavefunction, geometry, frequencies, excited states). Units are those of cclib:
+Angstrom for the coordinates, hartree for the energies (eV values of cclib are converted),
+cm-1 for the frequencies. Every field defaults to None: a value missing in a log stays None.
+Assignments are validated (``validate_assignment``), so a value of the wrong type is refused.
+"""
+
 from typing import Any, Dict, List, Tuple, Union
 
 from pydantic import BaseModel
@@ -7,20 +18,37 @@ DISPERSION_LABELS = {"d2": "D2", "d3zero": "D3(0)", "d3bj": "D3(BJ)", "d4": "D4"
 
 
 def functional_label(functional, dispersion=None):
-    """Functional with its dispersion correction, e.g. "B3LYP + D3(BJ)": the level of theory
-    compared between log files and shown in the report. Built-in corrections are also shown
-    ("wB97XD + D2"), since cclib reads the model from what the program prints."""
+    """Functional with its dispersion correction, e.g. ``"B3LYP + D3(BJ)"``.
+
+    This is the level of theory compared between log files (conformity.test_theory) and
+    shown in the report. Built-in corrections are shown too (``"wB97XD + D2"``), since cclib
+    reads the model from what the program prints.
+
+    Parameters
+    ----------
+    functional : str
+    dispersion : str, optional
+        cclib dispersion model (d2, d3zero, d3bj, d4, vv10), see DISPERSION_LABELS.
+
+    Returns
+    -------
+    str
+    """
     if dispersion is None:
         return functional
     return f"{functional} + {DISPERSION_LABELS.get(dispersion, dispersion)}"
 
 
 class CustomModel(BaseModel):
+    """Base of the models: assignments are validated against the field types."""
     model_config = {
         "validate_assignment": True,
     }
 
 class Metadata(CustomModel):
+    """Origin of the model: parser version, step file name, whether it has MO coefficients
+    (``discretizable``), and index of its entry in the YAML file (``config_idx``).
+    """
     parser_version: str = None
     log_file: str = None
     discretizable: bool = None
@@ -31,11 +59,15 @@ class Metadata(CustomModel):
 
 
 class MoleculeConnectivity(CustomModel):
+    """Bonds (Open Babel): atom index pairs, both directions, and bond orders."""
     atom_pairs: List[Tuple[int, int]] = None
     bond_orders: List[int] = None
 
 
 class Molecule(CustomModel):
+    """Composition and identity of the molecule: formula, atoms, charge, multiplicity, InChI,
+    SMILES, bonds and the starting geometry and energy of the calculation.
+    """
     chirality: bool = None
     atoms_valence: List[int] = None
     inchi: str = None
@@ -59,6 +91,11 @@ class Molecule(CustomModel):
     starting_nuclear_repulsion: float = None
 
 class CompDetailsGeneral(CustomModel):
+    """Computational details: program and version, methods, functional and dispersion model,
+    basis set (name, pickled cclib gbasis and its MD5 hash, size, AO names), closed or open
+    shell, solvent, SCF targets, core electrons per atom (ECP), and the job types given in
+    the YAML file.
+    """
     package: str = None
     package_version: str = None
     all_unique_theory: List[str] = None
@@ -81,21 +118,25 @@ class CompDetailsGeneral(CustomModel):
     job_type: List[str] = None
 
 class CompDetailsGeometry(CustomModel):
+    """Convergence targets of the geometry optimization."""
     geometric_targets: List[float] = None
 
 
 class CompDetailsFreq(CustomModel):
+    """Temperature and anharmonicity options of the frequency calculation."""
     temperature: Union[float, List[float]] = None # TODO : TO CHECK (DATA NOT FOUND IN SCANLOG & NOT SURE FOR TYPE)
     anharmonicity: List[List[float]] = None # TODO : TO CHECK (NOT SURE FOR TYPE)
 
 
 class CompDetailsExcitedStates(CustomModel):
+    """Number of computed excited states."""
     nb_et_states: int = None
     # TDA: str = None # TODO: Maybe Later
     # et_sym_constraints: str = None # TODO: Maybe Later
 
 
 class CompDetails(CustomModel):
+    """``comp_details`` section: general, geometry, frequency and excited state details."""
     general: CompDetailsGeneral = CompDetailsGeneral()
     geometry: CompDetailsGeometry = CompDetailsGeometry()
     freq: CompDetailsFreq = CompDetailsFreq()
@@ -103,6 +144,11 @@ class CompDetails(CustomModel):
 
 
 class ResultsWaveFunction(CustomModel):
+    """Wavefunction results: HOMO indexes, MO energies, symmetries and coefficients (kept up to
+    a cutoff, see scanlog.wavefunction_results_subsection), total energy, atomic charges,
+    multipole moments and SCF values. The conceptual DFT fields (A, I, Khi, Eta, Omega,
+    DeltaN, condensed Fukui functions) are not filled by the parser.
+    """
     homo_indexes: List[int] = None
     MO_energies: List[List[float]] = None
     MO_sym: List[List[str]] = None
@@ -130,6 +176,9 @@ class ResultsWaveFunction(CustomModel):
     CM5_partial_charges: List[float] = None  # TODO : TO CHECK (Not found in scanlong & Not sure for the type)
 
 class ResultsGeometry(CustomModel):
+    """Geometry results: coordinates (Angstrom, flat list), nuclear repulsion energy,
+    optimization status and convergence values.
+    """
     nuclear_repulsion_energy_from_xyz: float = None
     OPT_DONE: bool = None
     elements_3D_coords: List[float] = None
@@ -137,6 +186,9 @@ class ResultsGeometry(CustomModel):
 
 
 class ResultsFreq(CustomModel):
+    """Frequency results: thermochemistry (hartree), frequencies (cm-1), IR and Raman
+    intensities, symmetries, displacements, polarizabilities, anharmonicity.
+    """
     entropy: float = None
     enthalpy: float = None # TODO : TO CHECK (Not sure for the type)
     free_energy: float = None # TODO : TO CHECK (Not sure for the type)
@@ -152,6 +204,10 @@ class ResultsFreq(CustomModel):
 
 
 class ResultsExcitedStates(CustomModel):
+    """Excited state results: energies, oscillator and rotatory strengths, symmetries,
+    excitation amplitudes and transition dipoles. The charge-transfer fields (Tozer lambda,
+    d_ct, q_ct...) are not filled by the parser.
+    """
     et_energies: Union[List[float], Dict[str, Any]] = None # TODO : TO CHECK (Not sure for the type)
     et_oscs: List[float] = None # TODO : TO CHECK (Not sure for the type)
     et_sym : List[str] = None # TODO : TO CHECK (Not sure for the type)
@@ -166,9 +222,12 @@ class ResultsExcitedStates(CustomModel):
     mu_ct: List[Any] = None # TODO : TO CHECK (Not sure for the type)
     e_barycenter: List[Any] = None # TODO : TO CHECK (Not sure for the type)
     hole_barycenter: List[Any] = None # TODO : TO CHECK (Not sure for the type)
+    # Spin-orbit coupling results of ORCA (parser_engine.orca_soc.read_orca_soc), None otherwise
+    soc: Any = None
 
 
 class Results(CustomModel):
+    """``results`` section: wavefunction, geometry, frequency and excited state results."""
     wavefunction: ResultsWaveFunction = ResultsWaveFunction()
     geometry: ResultsGeometry = ResultsGeometry()
     freq: ResultsFreq = ResultsFreq()
@@ -176,6 +235,9 @@ class Results(CustomModel):
 
 
 class LogData(CustomModel):
+    """Everything read from one calculation step: metadata, molecule, computational details
+    and results (see the module documentation).
+    """
     metadata: Metadata = Metadata()
     molecule: Molecule = Molecule()
     comp_details: CompDetails = CompDetails()

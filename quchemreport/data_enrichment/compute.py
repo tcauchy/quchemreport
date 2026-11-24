@@ -1,3 +1,22 @@
+"""Computations of the report: everything that is not read directly in the log files.
+
+compute_data fills a ComputedData object from the parsed models and the conformity results,
+running only the computations needed by the outputs asked in the YAML file (ComputeFlags):
+labels and grids of the requested molecular orbitals, molecular electrostatic potential and
+its extrema on the molecular surface, population analysis, conceptual DFT indices and Fukui
+functions, spectra, transitions, electron density differences and natural transition orbitals
+of the excited states and of the optimized excited states.
+
+Grids are computed on the model chosen by the conformity tests (``data_for_discretization``):
+the reference, or a log at the same geometry that has the basis set and the MO coefficients.
+When no log has them, the grid outputs are skipped with a warning. Grids use a step of
+obk_step (0.075 bohr) and nproc threads (resources.nproc, 20 when omitted).
+
+Naming of the single points used for the Fukui functions: "SP plus" is the system with one
+more electron (N+1, the anion of a neutral molecule), used for f+; "SP minus" the system with
+one electron less (N-1, the cation), used for f-.
+"""
+
 from collections import defaultdict
 import io
 import json
@@ -12,13 +31,15 @@ import multiprocessing as mp
 import psutil
 
 from quchemreport.config.config import Config
-from quchemreport.data_enrichment import TD2UVvis, calc_orb
+from quchemreport.data_enrichment import TD2UVvis, calc_orb, mep_surface
 from quchemreport.data_enrichment.nto import build_nto_pairs, X_NORM_COMPLETE_THRESHOLD
 from quchemreport.data_enrichment.compute_flags import ComputeFlags, resolve_compute_flags
 from quchemreport.utility_services.computed_data import ComputedData, FukuiData, MODiagramsComputedData, init_computed_data
 from quchemreport.utility_services.log_data import LogData
 from quchemreport.utility_services.validated_data import ValidatedData
 from quchemreport.utility_services.parameters import FWHM, obk_step
+from quchemreport.utility_services.units import a0_to_A
+from quchemreport.utility_services.naming import spin_letter, state_number
 
 # Number of processes/threads for the grid computations; replaced by
 # config.resources.nproc (when given) at the start of compute_data.
@@ -28,6 +49,15 @@ nproc = 20
 
 def normalize_et_energies_format(et_energies: Optional[Union[List[float], Dict[str, Any]]]) -> Optional[List[float]]:
     # Cases where no et_energies are available
+    """Excited state energies as a list (cm-1), whatever the format given by cclib.
+
+    cclib gives a list for Gaussian and, for some ORCA versions, a dict of spectra; the
+    energies of the absorption spectrum through the electric transition dipoles are taken.
+
+    Returns
+    -------
+    list of float or None
+    """
     if et_energies is None:
         return None
 
@@ -51,6 +81,7 @@ def normalize_et_energies_format(et_energies: Optional[Union[List[float], Dict[s
 
 
 def format_MO_label(acronym, offset):
+    """Label of an orbital from its acronym and offset: (homo, 0) -> homo, (lumo, 2) -> lumo+2."""
     if offset == 0:
         return acronym
     return f"{acronym}{f'+{offset}' if offset > 0 else offset}"
@@ -58,6 +89,25 @@ def format_MO_label(acronym, offset):
 
 def compute_MO_labels_and_indexes(log_data: LogData, config: Config, log_file):
     
+    """Labels and indexes of the orbitals of ``MO_analysis.MO_list`` for one model.
+
+    Labels such as ``homo-1`` or ``lumo+2`` are converted into orbital indexes (0-based)
+    from the HOMO indexes; labels that do not exist in the model (homo+n, lumo-n, outside
+    the kept orbitals) are dropped with a warning. Unrestricted calculations give one list
+    per spin, with ``_alpha`` / ``_beta`` labels.
+
+    Parameters
+    ----------
+    log_data : LogData
+    config : Config
+    log_file : str
+        Name of the log, for the warning.
+
+    Returns
+    -------
+    MO_labels, MO_indexes : list of list, or (None, None)
+        One list per spin; None when the model has no orbital data.
+    """
     MO_list_labels = config.output.include.wavefunction.MO_analysis.MO_list
     HO_ind = log_data.results.wavefunction.homo_indexes
     MO_number_kept = log_data.results.wavefunction.MO_number_kept
@@ -142,8 +192,19 @@ def compute_MO_labels_and_indexes(log_data: LogData, config: Config, log_file):
 
 
 def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, computed_data: ComputedData):
-    """ref_data is the reference log (YAML 'reference: true'), not necessarily
-    the one used for the grids (which may be absent)."""
+    """Copy the data of the parsed models into ComputedData (one value per model).
+
+    Molecule identity and atomic charges are taken from the reference log (YAML
+    ``reference: true``), which is not necessarily the model used for the grids.
+
+    Parameters
+    ----------
+    list_data_models : list of LogData
+    ref_data : LogData
+        Reference model.
+    computed_data : ComputedData
+        Filled in place.
+    """
     
     # Extract simple data from the reference logfile
     computed_data.molecule.monoisotopic_mass = ref_data.molecule.monoisotopic_mass
@@ -217,6 +278,7 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
         computed_data.results.excited_states.et_oscs[i] = log.results.excited_states.et_oscs
         computed_data.results.excited_states.et_rot[i] = log.results.excited_states.et_rot
         computed_data.results.excited_states.et_transitions[i] = log.results.excited_states.et_transitions
+        computed_data.results.excited_states.soc[i] = log.results.excited_states.soc
         
         # Extract Wavefunction Results
         computed_data.results.wavefunction.total_molecular_energy[i] = log.results.wavefunction.total_molecular_energy
@@ -226,6 +288,7 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
 
 
 def serialize_topology(atom_pairs, atoms_Z):
+    """Canonical JSON of a topology (sorted bonds and atomic numbers), to group models with the same one."""
     data = {
         "atom_pairs": sorted([sorted(pair) for pair in atom_pairs]),
         "atoms_Z": atoms_Z,
@@ -235,6 +298,11 @@ def serialize_topology(atom_pairs, atoms_Z):
 
 def compute_molecule_representations(computed_data: ComputedData):
     
+    """Group the models by molecular topology (same atoms and bonds).
+
+    The first model of each group (the reference for its own group) gets the list of the
+    group in ``derived.molecule.topology_groups``: one topology picture is drawn per group.
+    """
     print("\n=================================================================")
     print(" Compute : Computing Molecule Representations")
     print("=================================================================")
@@ -277,6 +345,7 @@ def compute_molecule_representations(computed_data: ComputedData):
 
 
 def compute_all_MO_labels_and_indexes(computed_data: ComputedData, list_data_models: List[LogData], config: Config):
+    """Labels and indexes of the requested orbitals for every model."""
     print("\n=================================================================")
     print(" Compute : Computing MO Labels and Indexes")
     print("=================================================================")
@@ -299,6 +368,17 @@ def compute_all_MO_labels_and_indexes(computed_data: ComputedData, list_data_mod
 
 
 def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, step):
+    """Grids of the requested orbitals of the reference (one set per spin if unrestricted).
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    ref_data : LogData or None
+        Model used for the grids (skipped with a warning when None).
+    nproc : int
+    step : float
+        Grid step (bohr).
+    """
     if ref_data is None:
         print("Warning: MO diagrams skipped: no log file with MO coefficients for the reference.")
         return
@@ -357,6 +437,7 @@ def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, s
             )
 
 def compute_MEP_worker_direct(ref_data, nproc, step):
+    """Compute the MEP in the current process; None on MemoryError."""
     try:
         rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = calc_orb.Potential(ref_data, grid_step=step, nproc=nproc)
         return rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt
@@ -364,6 +445,7 @@ def compute_MEP_worker_direct(ref_data, nproc, step):
         return None
 
 def compute_MEP_worker(ref_data, nproc, step, queue):
+    """Compute the MEP in a child process and put the result (or None) in the queue."""
     try:
         rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt = calc_orb.Potential(ref_data, grid_step=step, nproc=nproc)
         queue.put((rho, MEP, grid_X, grid_Y, grid_Z, precomputed_rho_opt))
@@ -375,6 +457,29 @@ USE_MULTIPROCESSING = False  # switch global (YAML, CLI, debug)
 
 def compute_MEP_maps(computed_data, ref_data, nproc, step):
     
+    """Molecular electrostatic potential of the reference and its extrema on the surface.
+
+    The MEP grid (calc_orb.Potential) is stored with the density; its local minima and
+    maxima on the 0.001 e-/bohr3 density isosurface (mep_surface) and the half-width of
+    the colour scale of the picture, which depends on the charge, are stored too. A MEP that
+    cannot be computed (missing data, electron count inconsistent with an ECP, memory) is
+    skipped with a warning. With USE_MULTIPROCESSING, the computation runs in a child
+    process, so that a process killed for lack of memory does not stop the report.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    ref_data : LogData or None
+        Model used for the grids.
+    nproc : int
+    step : float
+        Grid step (bohr).
+
+    Returns
+    -------
+    precomputed_rho_opt : numpy.ndarray or None
+        Raw density of the reference on the grid, reused by the Fukui functions.
+    """
     print("\n=================================================================")
     print(" Compute : Computing MEP Maps")
     print("=================================================================")
@@ -449,6 +554,16 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
     computed_data.derived.wavefunction.MEP_maps.grid_Y = grid_Y
     computed_data.derived.wavefunction.MEP_maps.grid_Z = grid_Z
 
+    # Minima and maxima of the MEP on the molecular surface (pictures and table of the report)
+    try:
+        coords = np.asarray(ref_data.results.geometry.elements_3D_coords, dtype=float).reshape(-1, 3) / a0_to_A
+        computed_data.derived.wavefunction.MEP_maps.surface_isovalue = mep_surface.MEP_SURFACE_ISOVALUE
+        computed_data.derived.wavefunction.MEP_maps.color_range = mep_surface.color_range(ref_data.molecule.charge or 0)
+        computed_data.derived.wavefunction.MEP_maps.surface_extrema = mep_surface.mep_surface_extrema(
+            rho, MEP, grid_X, grid_Y, grid_Z, coords)
+    except Exception as e:
+        print(f"Warning: MEP surface extrema skipped: {e}")
+
     # Raw (non-renormalized) reference density, reused by the Fukui functions
     return precomputed_rho_opt
 
@@ -456,6 +571,12 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
 
 def compute_population_analysis_indices(computed_data: ComputedData):
 
+    """Atoms whose charge deviates from the mean by more than one standard deviation.
+
+    Done for each available charge model (Mulliken, Hirshfeld, CM5) of the reference; the
+    atoms kept are the union over the models. Means and standard deviations are stored for
+    the report.
+    """
     charges_dict = {
         'Mulliken': computed_data.results.wavefunction.Mulliken_partial_charges,
         'Hirshfeld': computed_data.results.wavefunction.Hirshfeld_partial_charges,
@@ -494,6 +615,24 @@ def compute_population_analysis_indices(computed_data: ComputedData):
 
 def compute_CDFT_global_indices(computed_data: ComputedData, ref_data: LogData, log_SP_plus: LogData, log_SP_minus: LogData):
     
+    """Conceptual DFT global indices and condensed Fukui functions of the reference.
+
+    Electron affinity A, ionization potential I, electronegativity, hardness,
+    electrophilicity and DeltaN, from the energies of the reference and of the single
+    points with one more and one electron less, and condensed Fukui functions from their
+    Mulliken and Hirshfeld charges (calc_orb.CDFT_Indices). Values that cannot be computed
+    are None.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    ref_data : LogData
+        Reference log.
+    log_SP_plus : LogData or None
+        Single point with one more electron (N+1).
+    log_SP_minus : LogData or None
+        Single point with one electron less (N-1).
+    """
     print("\n=================================================================")
     print(" Compute : Computing CDFT Global Indices")
     print("=================================================================")
@@ -522,6 +661,23 @@ def compute_CDFT_global_indices(computed_data: ComputedData, ref_data: LogData, 
 
 def compute_fukui_functions(computed_data: ComputedData, ref_data: LogData, log_SP_plus: LogData, log_SP_minus: LogData, step, precomputed_rho_opt=None):
     
+    """Grids of the Fukui functions f+ (from SP plus), f- (from SP minus) and of the dual
+    descriptor (when both exist).
+
+    The single points must be at the geometry of the reference; the density of the
+    reference computed for the MEP is reused when given.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    ref_data : LogData or None
+        Model used for the grids.
+    log_SP_plus, log_SP_minus : LogData or None
+        Single points with N+1 and N-1 electrons.
+    step : float
+    precomputed_rho_opt : numpy.ndarray, optional
+        Density of the reference on the same grid.
+    """
     print("\n=================================================================")
     print(" Compute : Computing Fukui Functions")
     print("=================================================================")
@@ -600,6 +756,22 @@ def compute_fukui_functions(computed_data: ComputedData, ref_data: LogData, log_
 def compute_reactivity(computed_data: ComputedData, validated_data: ValidatedData, ref_data: LogData, list_data_models: List[LogData], compute_flags: ComputeFlags, step, precomputed_rho_opt=None):
     
     # Skip if doing neither CDFT Indices or Fukui Funcions
+    """Conceptual DFT indices and Fukui functions, when requested.
+
+    The single points are found by their charge: SP plus has the charge of the reference
+    minus one (one more electron), SP minus the charge plus one.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    validated_data : ValidatedData
+    ref_data : LogData or None
+        Model used for the grids.
+    list_data_models : list of LogData
+    compute_flags : ComputeFlags
+    step : float
+    precomputed_rho_opt : numpy.ndarray, optional
+    """
     if (
         compute_flags.compute_CDFT_global_indices == False
         and compute_flags.compute_fukui_functions == False
@@ -651,12 +823,33 @@ def compute_reactivity(computed_data: ComputedData, validated_data: ValidatedDat
         compute_fukui_functions(computed_data, ref_data, log_SP_plus, log_SP_minus, step, precomputed_rho_opt=precomputed_rho_opt)
 
 def select_excited_states_indices(computed_data: ComputedData, log_idx, selection_mode="dominant_only", n=5, osc_threshold=0.1, rot_threshold=10):
-    """
-    Select excited states indices based on the selection mode.
-    
-    - "dominant_only" : only select states with significant oscillator strength (osc > osc_threshold) or rotation (R > rot_threshold)
-    - "first_n" : take the first n states
-    - "all_states" : take all available excited states
+    """Indexes (0-based) of the excited states shown in the report.
+
+    - ``"all_states"``: all the states;
+    - ``"first_n"``: the first n states;
+    - ``"dominant_only"``: the first five states, then the states with an oscillator
+      strength above osc_threshold or a rotatory strength above rot_threshold (a missing
+      criterion, e.g. no rotatory strengths in the log, is ignored).
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    log_idx : int
+        Model index.
+    selection_mode : str, optional
+    n : int, optional
+    osc_threshold : float, optional
+    rot_threshold : float, optional
+        In 10^-40 erg.esu.cm.
+
+    Returns
+    -------
+    list of int
+
+    Raises
+    ------
+    ValueError
+        Unknown selection mode.
     """
     
     et_energies = computed_data.results.excited_states.et_energies[log_idx]
@@ -713,6 +906,17 @@ def select_excited_states_indices(computed_data: ComputedData, log_idx, selectio
 
 
 def compute_es_Abso_and_CD_spectrum(computed_data: ComputedData, log_idx, do_abso, do_cd):
+    """Absorption and CD spectra of one TD model (Gaussian broadening, FWHM in cm-1).
+
+    The range covers the transitions with 9000 cm-1 margins (5000 to 100000 cm-1). No
+    spectrum is computed when all oscillator (or rotatory) strengths are zero.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    log_idx : int
+    do_abso, do_cd : bool
+    """
     if do_abso and do_cd:
         print("Calculating the UV absorption and CD spectrum.")
     elif do_abso:
@@ -775,6 +979,26 @@ def compute_es_Abso_and_CD_spectrum(computed_data: ComputedData, log_idx, do_abs
 
 
 def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogData, config: Config, log_idx, step, nproc, restart=False, verbose=False):
+    """Electron density differences, charge-transfer indices and transition dipoles of the
+    selected excited states of one TD model.
+
+    The orbitals of the excitation amplitudes are put on the grid (calc_orb.TD), which
+    gives for each selected state the density difference, the Tozer Lambda index, the
+    charge-transfer distance d_CT and charge q_CT, and the dipoles drawn in the pictures
+    (ground state, overlap, charge-transfer and electric transition dipoles). States
+    without excitation amplitudes in the log are skipped with a warning.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    ref_data : LogData or None
+        Model whose orbitals are used (see _td_orbitals).
+    config : Config
+    log_idx : int
+    step : float
+    nproc : int
+    restart, verbose : bool, optional
+    """
     output_dir = computed_data.metadata.output_dir
     
     et_energies = computed_data.results.excited_states.et_energies[log_idx]
@@ -911,7 +1135,24 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
 
 
 def compute_nto_states(computed_data, log, ref_data, log_idx, config):
-    """Build NTO coefficients only; spatial grids are generated one pair at a time."""
+    """Natural transition orbital pairs of the selected states of one TD model.
+
+    Only the NTO coefficients are built here (data_enrichment.nto); their grids are
+    computed one pair at a time when the pictures are drawn. The NTO are skipped, with a
+    warning, when the orbitals of ref_data are not those of the TD calculation (atoms,
+    charge, multiplicity, geometry, functional, basis set, HOMO and orbital energies must
+    match), since the amplitudes would then be applied to other orbitals.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    log : LogData
+        TD model.
+    ref_data : LogData or None
+        Model whose orbitals are used.
+    log_idx : int
+    config : Config
+    """
     name = log.metadata.log_file
     if ref_data is None or not getattr(ref_data.metadata, "discretizable", False):
         print(f"Warning: NTO skipped for {name}: reference orbital coefficients and basis are required.")
@@ -979,6 +1220,17 @@ def compute_nto_states(computed_data, log, ref_data, log_idx, config):
 
 def compute_excited_states(computed_data: ComputedData, list_data_models: List[LogData], ref_data: LogData, config: Config, compute_flags: ComputeFlags, step):
     
+    """Spectra, transitions, density differences and NTO of every TD model (type td).
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    list_data_models : list of LogData
+    ref_data : LogData or None
+    config : Config
+    compute_flags : ComputeFlags
+    step : float
+    """
     do_abso = compute_flags.compute_es_Abso_spectrum
     do_CD = compute_flags.compute_es_CD_spectrum
     do_transitions_and_EDD = compute_flags.compute_es_transitions_and_EDD
@@ -1027,10 +1279,18 @@ def compute_excited_states(computed_data: ComputedData, list_data_models: List[L
 
 
 def _td_orbitals(log: LogData, ref_data: LogData):
-    """Orbitals for the EDD and NTO of a TD log. Its excitation amplitudes refer to its own
-    orbitals (ORCA redoes the SCF: other phases and slightly other energies than the reference),
-    so they are used when the log has them at the geometry of the reference, orientation
-    included (the pictures are drawn with the atoms of the reference); otherwise the reference."""
+    """Orbitals used for the EDD and NTO of a TD model.
+
+    The excitation amplitudes refer to the orbitals of the TD calculation itself (ORCA
+    redoes the SCF: other phases and slightly other energies than the reference), so the TD
+    model is used when it has its orbitals at the geometry of the reference, orientation
+    included (the pictures are drawn with the atoms of the reference); otherwise the
+    reference.
+
+    Returns
+    -------
+    LogData or None
+    """
     from quchemreport.quality_check_engine.conformity import same_geometry
     if (ref_data is not None and log is not ref_data and _has_orbitals(log)
             and getattr(log.metadata, "discretizable", False) and same_geometry(ref_data, log)):
@@ -1041,6 +1301,19 @@ def _td_orbitals(log: LogData, ref_data: LogData):
 
 def compute_optimized_es_emi_and_CPL_spectrum(computed_data: ComputedData, log_idx, emi_state, do_emi, do_CPL):
     
+    """Emission and CPL spectra of one optimized excited state model.
+
+    The emitting state is ``excited_state_number`` of the YAML file; one Gaussian band is
+    drawn at its energy, from its oscillator (emission) and rotatory (CPL) strengths.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    log_idx : int
+    emi_state : int
+        Emitting state (1-based).
+    do_emi, do_CPL : bool
+    """
     et_transitions = computed_data.results.excited_states.et_transitions[log_idx]
     
     # Skip if data is missing
@@ -1100,7 +1373,76 @@ def compute_optimized_es_emi_and_CPL_spectrum(computed_data: ComputedData, log_i
         print("Computing CPL Spectrum done")
 
 
+# Radiative rate from the oscillator strength (Strickler-Berg, refractive index 1):
+# k_r [s-1] = f * nu^2 / STRICKLER_BERG with nu in cm-1.
+STRICKLER_BERG = 1.499
+
+
+def compute_phosphorescence(computed_data: ComputedData, log_idx, emi_state):
+    """Phosphorescence of an optimized triplet state from its spin-orbit coupled sublevels.
+
+    Needs an ORCA excited state optimization of a triplet with ``dosoc true`` (type opt_es):
+    at the optimized geometry, the three sublevels of the triplet (spin-orbit coupled states
+    whose main component is that triplet) carry small oscillator strengths towards the ground
+    state, which give the phosphorescence (vertical emission, one Gaussian band per sublevel).
+    The radiative rate of each sublevel follows Strickler-Berg (STRICKLER_BERG); the sublevels,
+    a fraction of cm-1 apart, are assumed in thermal equilibrium (room temperature), so the
+    mean rate gives the radiative lifetime. Nothing is done when the emitting state is not a
+    triplet or the log has no SOC data.
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    log_idx : int
+        Model index (type opt_es).
+    emi_state : int
+        ``excited_state_number`` of the YAML file (1-based, among all the states of the log).
+    """
+    soc = computed_data.results.excited_states.soc[log_idx]
+    et_sym = computed_data.results.excited_states.et_sym[log_idx]
+    if soc is None or emi_state is None or not et_sym or not 0 < emi_state <= len(et_sym):
+        return
+    if spin_letter(et_sym[emi_state - 1]) != "T":
+        return
+    label = f"T{state_number(et_sym, emi_state - 1)}"
+    sublevels = [{"energy": s["energy"], "fosc": s["fosc"],
+                  "k_r": s["fosc"] * s["energy"] ** 2 / STRICKLER_BERG}
+                 for s in soc["states"][1:] if s["components"] and s["components"][0][1] == label]
+    if not sublevels:
+        print(f"Warning: no spin-orbit coupled sublevel of {label} found: no phosphorescence.")
+        return
+    k_mean = sum(s["k_r"] for s in sublevels) / len(sublevels)
+    energies = [s["energy"] for s in sublevels]
+    td_start = max(5000, round(min(energies) - 9000, -3))
+    td_end = min(150000, round(max(energies) + 9000, -3))
+    numpts = int((td_end - td_start) / 20)
+    heights = [[s["fosc"] * 2.174e8 / FWHM for s in sublevels]]
+    xvalues, spectrum = TD2UVvis.GaussianSpectrum(td_start, td_end, numpts, energies, heights, FWHM)
+    computed_data.derived.optimized_excited_states.phosphorescence[log_idx] = {
+        "state": label, "sublevels": sublevels, "k_r": k_mean,
+        "lifetime": 1.0 / k_mean if k_mean > 0 else None,
+        "xvalues": xvalues, "spectrum": spectrum}
+    print(f"Phosphorescence of {label}: {1e7 / min(energies):.0f} nm, mean k_r = {k_mean:.3g} s-1")
+
+
 def compute_optimized_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogData, emi_state, log_idx, report_type, step, nproc, restart=False, verbose=False):
+    """Density difference, charge-transfer indices and dipole of the emitting state of one
+    optimized excited state model (skipped for text reports).
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    ref_data : LogData or None
+        Model whose orbitals are used: the optimized excited state itself when it has them,
+        otherwise the ground-state reference (approximate, with a warning).
+    emi_state : int
+        Emitting state (1-based).
+    log_idx : int
+    report_type : str
+    step : float
+    nproc : int
+    restart, verbose : bool, optional
+    """
     if report_type == 'text':
         return
     
@@ -1185,6 +1527,19 @@ def compute_optimized_es_transitions_and_EDD(computed_data: ComputedData, ref_da
 
 def compute_optimized_excited_states(computed_data: ComputedData, list_data_models: List[LogData], ref_data: LogData, config: Config, report_type, compute_flags: ComputeFlags, step):
     
+    """Spectra, transitions and density differences of every optimized excited state model
+    (types opt_es, freq_es).
+
+    Parameters
+    ----------
+    computed_data : ComputedData
+    list_data_models : list of LogData
+    ref_data : LogData or None
+    config : Config
+    report_type : str
+    compute_flags : ComputeFlags
+    step : float
+    """
     do_emi = compute_flags.compute_optimized_es_emi_spectrum
     do_CPL = compute_flags.compute_optimized_es_CPL_spectrum
     do_transitions_and_EDD = compute_flags.compute_optimized_es_transitions_and_EDD
@@ -1216,7 +1571,9 @@ def compute_optimized_excited_states(computed_data: ComputedData, list_data_mode
             print(f" (Source : {log_file})")
             print("-----------------------------------------------------------------")
             
-            compute_optimized_es_emi_and_CPL_spectrum(computed_data, log_idx, emi_state, do_emi, do_CPL)   
+            compute_optimized_es_emi_and_CPL_spectrum(computed_data, log_idx, emi_state, do_emi, do_CPL)
+            if do_emi:
+                compute_phosphorescence(computed_data, log_idx, emi_state)   
         
         
         if do_transitions_and_EDD:
@@ -1241,7 +1598,7 @@ def compute_optimized_excited_states(computed_data: ComputedData, list_data_mode
 
 
 def _has_orbitals(model: LogData):
-    """True when the log has what the grids need: MO coefficients, basis set and AO names."""
+    """Whether a model has what the grids need: MO coefficients, basis set and AO names."""
     general = model.comp_details.general
     mo_coefs = model.results.wavefunction.MO_coefs
     return (mo_coefs is not None and len(mo_coefs) in (1, 2)
@@ -1249,6 +1606,24 @@ def _has_orbitals(model: LogData):
 
 
 def compute_data(list_data_models: List[LogData], validated_data: ValidatedData, config: Config, compute_flags: ComputeFlags, step = obk_step):
+    """Run all the computations of the report.
+
+    Parameters
+    ----------
+    list_data_models : list of LogData
+        Parsed models.
+    validated_data : ValidatedData
+        Conformity results (reference, model used for the grids).
+    config : Config
+    compute_flags : ComputeFlags
+        Computations to run.
+    step : float, optional
+        Grid step (bohr), obk_step by default.
+
+    Returns
+    -------
+    ComputedData
+    """
     global nproc
     if config.resources.nproc is not None:
         nproc = config.resources.nproc

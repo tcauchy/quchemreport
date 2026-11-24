@@ -1,5 +1,14 @@
 ## -*- encoding: utf-8 -*-
 
+"""Default parameters of the computations and pictures.
+
+obk_step is the step of the grids (bohr) and obk_extand their margin around the atoms; FWHM the
+width of the Gaussian bands of the spectra (cm-1); img_width / img_height the default size of
+the 3D pictures (output.image_size overrides it); colors and scale the colours of the
+iso-surfaces and the scale factors of the dipole arrows. The camera views are chosen from the
+geometry (visualization_engine/camera.py).
+"""
+
 from quchemreport.utility_services import units
 
 ## Default parameters
@@ -21,25 +30,7 @@ FWHM = 3000 # 3000 cm-1 for full width at half maximum of gaussian band.
 # Default side of the 3D images; overridden by output.image_size in the YAML
 img_width = 1200
 img_height = 1200
-# In mayavi the elevation is the theta angle from the z axis (physics convention) in spherical coordinates. 
-# The azimuth is the phi angle on the x-y plane. 
-# By default the elevation is set to 55° and azimuth to around 55°
-# The thing is that the automatic positining of the z axis will depend on the molecule shape
-# Case 1:
-# For planar compound with a rectangular shape the z axis is PERPENDICULAR to the maximun number of atoms. Elevation near 10° is adapted
-# Changing the azimuth will rotate the molecule around the camera axis favoring a portrait orientation with an azimuth 0°  
-# Therefore the optimal view for a landscape orientation should correspond to an azimuth of 90°.
-elev_angle_cam1 = 10
-azimuth_cam1 =  90
-
-# Case 2 : 
-# For linear or planar compound with a square shape the z axis is ALONG the maximun number of atoms. Elevation near 0° is NOT adapted
-# Best elevation should be around 80° to have a little bit of perspective (camera will therefore be near the x or y axis). 
-# For linear compounds changing the azimuth will not  change the view : rotation around the camera axis   
-# However for planar molecules with a square shape changing the azimuth to 90° or 270° and an elevation of 80° 
-# will bring back the atoms again along the camera axis. Not adapted 
-elev_angle_cam2 = 80
-azimuth_cam2 =  10
+# Camera views: chosen from the geometry, see visualization_engine/camera.py
 
 # isosurface opacity
 surf_opacity = 1
@@ -57,9 +48,9 @@ colors = {"OM" : (0.4, 0, 0.235),  #For OM positive surface Tyrian purple
           }
 scale = {"CTDIP" : 1., #For transitions charge transfer dipole same as EDD surface
           "GSDIP" : 1.,
-          "ELDIP" : 1./units.A_to_a0,
-          "VELDIP" : 1./units.A_to_a0,
-          "MAGDIP" : 1./units.A_to_a0,
+          "ELDIP" : 1./units.a0_to_A,
+          "VELDIP" : 1./units.a0_to_A,
+          "MAGDIP" : 1./units.a0_to_A,
           "OVDIP" : 1. #For transitions wavefunctions overlap dipole same as Oif surface 
           }
 
