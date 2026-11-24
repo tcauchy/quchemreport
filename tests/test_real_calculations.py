@@ -392,3 +392,15 @@ def test_mo_energies_below_the_printed_format():
     energies = model.results.wavefunction.MO_energies[0]
     assert energies[0] == -np.inf and np.isfinite(energies[1:]).all()
     assert qb.occupations(model, len(energies))[0].sum() == 62
+
+
+# ------------------------------------------------------- excited states of ORCA
+
+def test_orca_excited_state_energies_in_cm1():
+    """The cclib JSON gives ORCA's excited state energies in hartree (dict of spectra); they were
+    read as cm-1 (wavelengths of millions of nm in the ORCA reports). S1 of H2CO: ~33100 cm-1
+    with both programs."""
+    gaussian = read_steps("gaussian/h2co/TD.log")[-1].results.excited_states.et_energies
+    orca = read_steps("orca6/h2co/TD.out", "orca")[-1].results.excited_states.et_energies
+    assert isinstance(orca, list) and 30000 < orca[0] < 36000
+    assert abs(orca[0] - gaussian[0]) / gaussian[0] < 0.02

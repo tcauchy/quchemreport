@@ -531,7 +531,14 @@ def freq_results_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "results.freq.vibrational_raman", data_json, ['vibrations', 'intensities', 'raman'])
 
 def td_results_subsection(data_model: LogData, data_json, data, obdata):
-    try_update_value(data_model, "results.excited_states.et_energies", data_json, ['transitions', 'electronic transitions'])
+    # Energies in cm-1 from the cclib attribute etenergies, for every program. The cclib JSON
+    # gives ORCA's energies as a dict of spectra in hartree (e.g. "ABSORPTION SPECTRUM VIA
+    # TRANSITION ELECTRIC DIPOLE MOMENTS"), which were then read as cm-1: until 24/11/2026 the
+    # excited state tables and spectra of ORCA reports had wavelengths of millions of nm.
+    if getattr(data, "etenergies", None) is not None:
+        try_update_value(data_model, "results.excited_states.et_energies", [float(e) for e in data.etenergies])
+    else:
+        try_update_value(data_model, "results.excited_states.et_energies", data_json, ['transitions', 'electronic transitions'])
     try_update_value(data_model, "results.excited_states.et_oscs", data_json, ['transitions', 'oscillator strength'])
     try_update_value(data_model, "results.excited_states.et_sym",  data_json, ['transitions', 'symmetry'])
     try_update_value(data_model, "results.excited_states.et_transitions", data_json, ['transitions', 'one excited config'])
