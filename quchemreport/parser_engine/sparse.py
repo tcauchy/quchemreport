@@ -1,8 +1,15 @@
+"""Former lossy compression of the MO coefficients into sparse matrices (database version of the
+parser). Not used: the parser keeps the full coefficients.
+"""
+
 import numpy as np
 import sklearn
 import scipy.sparse as sp
 
 def sparse(data, mo_coefs, nb_coef, b_cut):
+    """Append to mo_coefs, for each coefficient matrix of data, its sparse CSR form after
+    zeroing the smallest coefficients (cumulated weight below 5 % per orbital).
+    """
     threshold = 0.05 # compression with loss threshold
     for a in data.mocoeffs[nb_coef:]:
         # normalization

@@ -1,3 +1,9 @@
+"""Execution of a report, from the configuration to the PDF file.
+
+run() calls the stages in order (see docs/architecture.md): reading of the log files,
+conformity tests, computations, pictures and report.
+"""
+
 import json
 import tempfile
 import traceback
@@ -15,6 +21,21 @@ from quchemreport.report_generator.generate_report import generate_report
 
 def run(config: Config):
     # Config implicitly validated when the object is created
+    """Build the report described by a configuration.
+
+    The log files are split into steps in a temporary folder; a stage that finds an
+    inconsistency stops the program with a message.
+
+    Parameters
+    ----------
+    config : Config
+        Validated configuration (YAML_loader.load_yaml_config).
+
+    Raises
+    ------
+    ValueError
+        No log file could be read.
+    """
     from quchemreport.visualization_engine import visu_mayavi
     visu_mayavi.set_image_size(config.output.image_size)
     visu_mayavi.set_image_grid_reduction(config.output.image_grid_reduction,

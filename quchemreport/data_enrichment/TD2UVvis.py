@@ -13,6 +13,12 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # General Public License for more details.
 
+"""Spectra of the excited states with a Gaussian broadening.
+
+Adapted from GaussSum (N. M. O'Boyle, A. L. Tenderholt and K. M. Langner, J. Comput. Chem.
+2008, 29, 839-845), GNU General Public License version 2 or later (see the header comments).
+"""
+
 import math 
 import numpy as np
 
@@ -21,6 +27,28 @@ def GaussianSpectrum(start,end,numpts,et_energies,heights,FWHM):
 # et_energies is a list of excited states energies in cm-1
 # et_oscs is a list of oscillator strength
 
+    """Sum of Gaussian bands centred on the excitation energies.
+
+    Parameters
+    ----------
+    start, end : float
+        Range of the spectrum (cm-1).
+    numpts : int
+        Number of points.
+    et_energies : list of float
+        Energies of the bands (cm-1).
+    heights : list of list of float
+        One list of band heights per spectrum to compute (e.g. absorption, CD).
+    FWHM : float
+        Full width at half maximum of the bands (cm-1).
+
+    Returns
+    -------
+    xvalues : numpy.ndarray
+        Wavenumbers (cm-1).
+    spectrum : numpy.ndarray
+        One row per list of heights.
+    """
     peaks = et_energies
     xvalues = np.arange(numpts)*float(end-start)/(numpts-1) + start
     data = []
@@ -44,6 +72,24 @@ def CDheights(et_energies, et_rotats, FWHM):
     # This uses Delta, the half width at 1/e height.
     # We use Sigma, the full width at 1/e height.
     #   Delta = Sigma / 2
+    """Heights of the CD bands (Delta epsilon, L mol-1 cm-1) from the rotatory strengths.
+
+    Equation 8 of Stephens and Harada, Chirality 2010, 22, 229, with the half width at 1/e
+    of the Gaussian bands derived from FWHM.
+
+    Parameters
+    ----------
+    et_energies : list of float
+        Energies (cm-1).
+    et_rotats : list of float
+        Rotatory strengths (10^-40 erg.esu.cm, as printed by the programs).
+    FWHM : float
+        Full width at half maximum (cm-1).
+
+    Returns
+    -------
+    list of float
+    """
     sigma = FWHM / math.sqrt(math.log(2))
     Delta = sigma / 2.
     prefactor = 1.0 / (2.296e-39 * math.sqrt(math.pi) * Delta)

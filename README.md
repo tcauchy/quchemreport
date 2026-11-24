@@ -1,75 +1,54 @@
 # QuChemReport
 
-QuChemReport is a Python module for molecular quantum chemistry calculations results. 
+QuChemReport turns the output files of quantum chemistry calculations on one molecule into a
+PDF report. From Gaussian or ORCA calculations (optimization, frequencies, single points of the
+ions, excited states, optimized excited states), it checks that they describe the same molecule
+at the same level of theory, then reports:
 
-The project was started in 2010 by Thomas CAUCHY, assistant professor in the MOLTECH-Anjou laboratory of the University of Angers (FRANCE).
-At first a computational chemist program maintained by Thomas CAUCHY and Yohann MORILLE, the project boomed with the involvment of Benoit DA MOTA. 
-Benoit DA MOTA is a computer scientist assistant professor of the LERIA laboratory of the University of Angers.
+- computational details, energies and thermochemistry, IR vibrations;
+- molecular orbitals, molecular electrostatic potential on the molecular surface with its
+  minima and maxima, population analysis;
+- conceptual DFT indices and Fukui functions;
+- excited states: transitions, absorption, CD, emission and CPL spectra, electron density
+  differences, charge-transfer indices, natural transition orbitals;
+- with ORCA, spin-orbit couplings between singlets and triplets, Jablonski-Perrin diagram and
+  phosphorescence (radiative rates and lifetime of the T1 sublevels).
 
-Installation
-Dependencies
-QuChemReport works with:
+## Quick start (MOLTECH-Anjou cluster)
 
-Python (>= 3.5)
-NumPy
-SciPy
+```bash
+conda activate /applis/conda_envs/quchemreport
+cp /applis/quchemreport/example.yaml report.yaml     # then edit the log files and options
+xvfb-run -a python /applis/quchemreport/cli.py -c report.yaml
+```
 
-For the parsing process:
-requests
-Openbabel (>= 2.4.1) (apt install openbabel-dev and pip3 install openbabel)
-Cclib (>= 1.5)
-Scikit-learn
-scanlog (pip3 install scanlog)
+The report is written in `<output_path>/<molecule_designated_name>/`.
 
-For  the discretization process:
-cython3
-python3-h5py
-Orbkit (git clone https://github.com/orbkit/orbkit.git, beware to export ORBKITPATH)
+## Documentation
 
-For the vizualization process:
-latex (pdflatex)
-pylatex (pip3 install pylatex)
-PIL or on conda pillow
-Matplotlib (>3.1)
-Mayavi (pip3 install : beware of pyface install ! problem with Qt4, Qt5 in profile : export QT_API=pyqt, export ETS_TOOLKIT=qt4)
+See [docs/](docs/README.md):
 
-User installation
+- [Preparing the calculations](docs/calculations.md) (Gaussian and ORCA keywords, example
+  inputs in `examples/acetone`);
+- [Running QuChemReport](docs/running.md);
+- [The YAML configuration file](docs/configuration.md);
+- [The report](docs/report.md);
+- [Troubleshooting](docs/troubleshooting.md);
+- [Architecture](docs/architecture.md), for developers. Tests: `tests/README.md`.
 
-git clone https://github.com/BenoitDamota/QuChemReport.git
+## Requirements
 
-Project History
+Python 3.12 with NumPy, SciPy, pydantic, PyYAML, cclib (with two changes not released yet:
+cclib pull requests #1972 and #1973), Open Babel with its Python bindings, QMCkl, Mayavi/VTK,
+matplotlib, pylatex, and a LaTeX distribution (`pdflatex`). orbkit is only needed to compare with
+the former grid engine.
 
-Natural transition orbitals (NTO)
+## History
 
-Set `output.include.excited_states.natural_transition_orbitals.enabled` to
-`true` in the YAML file to generate hole/electron NTO pairs for the states
-selected by `excited_states.selection`. The example YAML documents the
-maximum pairs per state, minimum relative weight, grid spacing in bohr and
-number of ORBKIT workers. The feature is disabled by default, including for
-older configuration files.
+The project was started in 2010 by Thomas CAUCHY, assistant professor in the MOLTECH-Anjou
+laboratory of the University of Angers (France). At first a computational chemistry program
+maintained by Thomas CAUCHY and Yohann MORILLE, the project boomed with the involvement of
+Benoit DA MOTA, computer scientist and assistant professor in the LERIA laboratory of the
+University of Angers.
 
-The calculation uses the printed excitation amplitudes X, omits TDDFT
-de-excitation amplitudes Y, and normalizes the squared singular values over
-all available X amplitudes for each state. Open-shell alpha and beta blocks
-are decomposed separately and their weights share the same normalization.
-Missing or truncated coefficients can change both the NTOs and their weights;
-for Gaussian, `IOp(9/40=4)` requests more printed amplitudes. The reference
-log must contain basis and MO coefficients, including all orbitals used by
-the printed transitions. Its canonical orbitals must be the same orbitals,
-in the same order and phases, as those used for the TD calculation. The code
-checks available geometry, spin, basis, method and orbital energies, but these
-checks cannot prove that orbital phases or rotations match. Prefer a TD log
-containing its own basis and MO coefficients when available, or use an
-explicitly shared reference/checkpoint. Incompatible data are skipped with a
-warning. Green and gold in NTO images represent opposite orbital phases;
-absolute phase signs are arbitrary.
-
-Help and Support
-Documentation
-
-Communication
-
-Citation
-
-
-
+Repository: https://github.com/tcauchy/QuChemReport

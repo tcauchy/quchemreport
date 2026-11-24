@@ -1,3 +1,5 @@
+"""Former copy of TD2UVvis.GaussianSpectrum. Not used (TD2UVvis is used instead)."""
+
 import math 
 import numpy as np
 
@@ -6,6 +8,7 @@ def GaussianSpectrum(start,end,numpts,et_energies,heights,FWHM):
 # et_energies is a list of excited states energies in cm-1
 # et_oscs is a list of oscillator strength
 
+    """Same as TD2UVvis.GaussianSpectrum."""
     peaks = et_energies
     xvalues = np.arange(numpts)*float(end-start)/(numpts-1) + start
     data = []

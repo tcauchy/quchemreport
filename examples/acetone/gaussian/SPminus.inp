@@ -1,0 +1,9 @@
+%Chk=SPminus
+%NProcShared=4
+%mem=2GB
+#p PBE1PBE/6-31G(d) pop=full gfprint geom=check
+
+SPminus acetone
+
+-1 2
+

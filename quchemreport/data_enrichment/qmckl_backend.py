@@ -48,6 +48,7 @@ def _monomial_overlap(p, q):
 
 
 def _normalize_row(row, powers):
+    """Normalize a solid harmonic given as Cartesian monomial coefficients (overlap metric)."""
     norm2 = sum(row[i] * row[j] * _monomial_overlap(powers[i], powers[j])
                 for i in range(len(powers)) for j in range(len(powers)))
     return row / sqrt(norm2)
@@ -158,6 +159,19 @@ class Wavefunction:
     def __init__(self, data_model, orca_signs=True, nproc=None):
         # nproc limits the OpenMP (qmckl) and BLAS threads during the evaluations;
         # None keeps the library defaults (OMP_NUM_THREADS, or all the cores).
+        """Prepare the QMCkl evaluation of the orbitals of a model.
+
+        Parameters
+        ----------
+        data_model : LogData
+            Model with the basis set (cclib gbasis), the AO names and the MO coefficients.
+        orca_signs : bool, optional
+            For ORCA logs, flip the sign of the f (|m| = 3) and g (|m| = 3, 4) spherical
+            functions, whose convention differs from the standard one (ORCA_SIGN_FLIPS).
+        nproc : int, optional
+            Threads of QMCkl (OpenMP) and BLAS during the evaluations; None keeps the library
+            defaults.
+        """
         self.nproc = nproc
         general = data_model.comp_details.general
         self.data_model = data_model
@@ -310,5 +324,6 @@ class Wavefunction:
 
 
 def _p_power(label):
+    """Cartesian powers (x, y, z) of a p orbital from its AO name (e.g. ``C1_2PX`` -> (1, 0, 0))."""
     axis = label.lower().split("_")[-1][-1]
     return {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}[axis]

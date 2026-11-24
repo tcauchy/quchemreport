@@ -32,4 +32,5 @@ def state_label(state_symmetries, k):
 
 
 def state_labels(state_symmetries):
+    """Labels (S1, T1, S2...) of all the states (see state_label)."""
     return [state_label(state_symmetries, k) for k in range(len(state_symmetries))]

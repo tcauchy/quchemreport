@@ -1,5 +1,22 @@
 #-*- coding: utf-8 -*-
 
+"""Conformity tests of the log files and choice of the reference log.
+
+A report describes one molecule (one conformer) at one level of theory. The tests check that the
+log files given in the YAML file are consistent with this: same program, same formula, same
+functional (with its dispersion correction) and basis set, same geometry for the ground state
+calculations (nuclear repulsion energy), same charge and multiplicity apart from the single
+points of the cation and anion, and at least one optimization or frequency calculation of the
+ground state. A failed test prints the values that differ and stops the program.
+
+The reference log (``reference: true`` in the YAML file) is then chosen, with the model used
+for the grid computations (MO, MEP, Fukui, EDD): it must have the basis set and the MO
+coefficients. The result is a ValidatedData object.
+
+Optimized excited states (types opt_es, freq_es) have another geometry and are left out of the
+geometry test; single points (type sp) are left out of the charge and multiplicity tests.
+"""
+
 from dataclasses import dataclass
 import sys
 import numpy as np
@@ -11,6 +28,13 @@ from quchemreport.utility_services.validated_data import ValidatedData
 
 @dataclass
 class ExtractedData:
+    """Values of all the parsed models gathered for the conformity tests.
+
+    Lists have one value per model, in the order of the parsed models, except those whose
+    name says which models they keep: ``nres_noES`` (no optimized excited state),
+    ``charges_noSP`` / ``multiplicities_noSP`` (no single point), ``charges_SP``.
+    ``formulas_nocharges`` are the formulas without the charge that Open Babel appends.
+    """
     nb_files: int
     packages: List[str]
     formulas: List[str]
@@ -32,6 +56,12 @@ class ExtractedData:
 
 @dataclass
 class ReferenceData:
+    """Data of the model used for the grid computations (see select_reference_data).
+
+    ``data_for_discretization`` is that model (None when no log has the basis set and the
+    MO coefficients); the other fields are its charge, multiplicity, MO coefficients, basis
+    set, atomic orbital names and program.
+    """
     charge_ref: int
     multiplicity_ref: int
     MO_coeff_ref: List
@@ -41,6 +71,21 @@ class ReferenceData:
     data_for_discretization: object
 
 def extract_data_models(list_data_models: List[LogData], verbose=False):
+    """Gather the values of the parsed models needed by the conformity tests.
+
+    Parameters
+    ----------
+    list_data_models : list of LogData
+        Parsed models, in the order of the YAML file (several per multi-step log file).
+    verbose : bool, optional
+        Print details.
+
+    Returns
+    -------
+    ExtractedData
+        The values to compare. Functionals are given with their dispersion correction
+        (log_data.functional_label), so that B3LYP and B3LYP + D3(BJ) differ.
+    """
     packages = []
     formulas = []
     functionals = []
@@ -145,6 +190,15 @@ def extract_data_models(list_data_models: List[LogData], verbose=False):
     )
 
 def test_package(data: ExtractedData, config: Config):
+    """Stop the program if the log files come from several programs.
+
+    A program different from ``common_solver`` of the YAML file only gives a warning.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    config : Config
+    """
     packages = data.packages
 
     if (
@@ -163,6 +217,12 @@ def test_package(data: ExtractedData, config: Config):
 
 def test_formula(data: ExtractedData):
     # Checking if data_models has more than 1 file in order to process parenting and uniformity test
+    """Stop the program if the log files are not of the same molecule (formula without charge).
+
+    Parameters
+    ----------
+    data : ExtractedData
+    """
     if (data.nb_files) < 1 :
         return
     
@@ -185,6 +245,15 @@ def test_theory(data: ExtractedData):
     # print("Detected number of basis sets : ", len(set(data.basis_sets)))
     # print("Detected number of functionals : ", len(set(data.functionals)))
 
+    """Stop the program if the log files mix functionals or basis sets.
+
+    The functional includes its dispersion correction (``B3LYP + D3(BJ)``), so that
+    calculations with and without dispersion are not mixed.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    """
     if (len(set(data.functionals)) > 1) or (len(set(data.basis_sets)) > 1): 
         print("\tDetected number of basis sets:                   ... ", len(set(data.basis_sets)))
         print("\tDetected functionals:                            ... ", data.functionals)
@@ -208,11 +277,33 @@ NRE_RTOL = 5e-6
 
 
 def same_nre(a, b, rtol=NRE_RTOL):
+    """Whether two nuclear repulsion energies are those of the same geometry.
+
+    Parameters
+    ----------
+    a, b : float or None
+        Nuclear repulsion energies (None: not the same).
+    rtol : float, optional
+        Relative tolerance, NRE_RTOL by default (see its comment for the values).
+
+    Returns
+    -------
+    bool
+    """
     return a is not None and b is not None and abs(a - b) <= rtol * max(abs(a), abs(b))
 
 
 def test_nuclear_repulsion(data: ExtractedData):
     # Test on NRE to ensure that there is only one conformer
+    """Stop the program if the ground state calculations are not at the same geometry.
+
+    The geometry is compared through the nuclear repulsion energy, which does not depend on
+    the orientation; optimized excited states are left out.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    """
     nres = [nre for nre in data.nres_noES if nre is not None]
     if nres and not same_nre(min(nres), max(nres)):
         print("\tSame geometries (no optimized excited state):    ... ", len(set(data.nres_noES)))
@@ -233,6 +324,15 @@ SINGLE_POINTS_ONLY = (
 
 
 def test_charge(data: ExtractedData):
+    """Stop the program if the calculations other than single points have different charges.
+
+    Also stops when all the log files are single points: the report needs the ground state
+    optimization as reference (SINGLE_POINTS_ONLY message).
+
+    Parameters
+    ----------
+    data : ExtractedData
+    """
     if (len(set(data.charges_noSP))) > 1:
         print("\tDetected charges (No single points):             ... ", len(set(data.charges_noSP)))
         print("\tDetected charges (with single points):           ... ",data.charges)
@@ -249,6 +349,13 @@ def test_charge(data: ExtractedData):
 
 def test_multiplicity(data: ExtractedData):
     # Test on multiplicity to ensure that there is only one oxydation state whitout counting the single points
+    """Stop the program if the calculations other than single points have different
+    multiplicities (several electronic states).
+
+    Parameters
+    ----------
+    data : ExtractedData
+    """
     if (len(set(data.multiplicities_noSP))) > 1:
         print("\tDetected multiplicities (No single points):      ... ", len(set(data.multiplicities_noSP)))
         print("\tDetected multiplicities (with single points):    ... ",data.multiplicities)
@@ -266,6 +373,12 @@ def test_multiplicity(data: ExtractedData):
 
 def test_ground_state_presence(data: ExtractedData):
     # Test on Ground State information in case of multiples log files
+    """Stop the program if no log file is an optimization or a frequency calculation.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    """
     job_types = data.job_types
     has_ground_state = any(
         "opt" in jt or "freq" in jt for jt in job_types
@@ -280,6 +393,15 @@ def test_ground_state_presence(data: ExtractedData):
 
 def run_selected_tests(data: ExtractedData, config: Config, verbose=False):
     # Checking logfiles packages
+    """Run the program test, then the tests enabled in ``quality_control.checks``.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    config : Config
+    verbose : bool, optional
+        Print the disabled tests.
+    """
     test_package(data, config)
     
     tests_map = {
@@ -303,10 +425,27 @@ def run_selected_tests(data: ExtractedData, config: Config, verbose=False):
 
 def compare_refs(data: ExtractedData, ref_idx):
     # TODO : TO COMPLETE
+    """Placeholder for a comparison of the reference with the other logs (not implemented,
+    always True).
+    """
     return True
 
 
 def select_reference_log(data: ExtractedData, config: Config):
+    """Index, in the YAML file, of the log file marked ``reference: true``.
+
+    Stops the program if no log file, or more than one, is marked.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    config : Config
+
+    Returns
+    -------
+    int
+        Index of the reference in ``config.logfiles``.
+    """
     ref_idx = []
     for idx, logfile in enumerate(config.logfiles):
         if logfile.reference:
@@ -329,8 +468,22 @@ def select_reference_log(data: ExtractedData, config: Config):
 
 
 def reference_model_index(data: ExtractedData, config_reference_idx):
-    """Index of the reference among the parsed models (a YAML log file may give several
-    steps/models): first step of the reference log file that has MO coefficients, else its first step."""
+    """Index of the reference among the parsed models.
+
+    A log file of the YAML file may give several models (one per step): the first step of
+    the reference log file that has MO coefficients is taken, otherwise its first step.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    config_reference_idx : int
+        Index of the reference in the YAML file (select_reference_log).
+
+    Returns
+    -------
+    int
+        Index of the reference model in ``data.list_data_models``.
+    """
     steps = [i for i, model in enumerate(data.list_data_models)
              if model.metadata.config_idx == config_reference_idx]
     if not steps:
@@ -341,8 +494,21 @@ def reference_model_index(data: ExtractedData, config_reference_idx):
 
 
 def same_geometry(model_a, model_b, atol=1e-4):
-    """Same atoms at the same cartesian coordinates (A), orientation included: the grids
-    of one log are drawn with the atoms of the other one."""
+    """Whether two models have the same atoms at the same Cartesian coordinates.
+
+    The orientation counts: the grids computed from one log are drawn with the atoms of the
+    other one, so a rotated copy of the geometry is not the same.
+
+    Parameters
+    ----------
+    model_a, model_b : LogData
+    atol : float, optional
+        Tolerance on each coordinate (Angstrom).
+
+    Returns
+    -------
+    bool
+    """
     a = model_a.results.geometry.elements_3D_coords
     b = model_b.results.geometry.elements_3D_coords
     if a is None or b is None or model_a.molecule.atoms_Z != model_b.molecule.atoms_Z:
@@ -352,11 +518,24 @@ def same_geometry(model_a, model_b, atol=1e-4):
 
 
 def select_reference_data(data: ExtractedData, reference_id, verbose: bool = False):
-    """reference_id is the index of the reference model (see reference_model_index).
+    """Choose the model used for the grid computations (MO, MEP, Fukui, EDD).
 
-    The grids (MO, MEP, Fukui, EDD...) use the reference itself when it has MO
-    coefficients and a basis set; otherwise the first other log of the same
-    charge, multiplicity, geometry (NRE) and solvent that has them."""
+    The reference itself is used when it has the MO coefficients and the basis set;
+    otherwise the first other model of the same charge, multiplicity, geometry (orientation
+    included, see same_geometry) and solvent that has them. When none has them, a warning
+    is printed and the grid pictures are skipped.
+
+    Parameters
+    ----------
+    data : ExtractedData
+    reference_id : int
+        Index of the reference model (reference_model_index).
+    verbose : bool, optional
+
+    Returns
+    -------
+    ReferenceData
+    """
     models = data.list_data_models
     ref_model = models[reference_id]
     charge_ref = data.charges[reference_id]
@@ -366,6 +545,7 @@ def select_reference_data(data: ExtractedData, reference_id, verbose: bool = Fal
     package_ref = data.packages[reference_id]
 
     def usable(i):
+        """Whether model i has the orbitals, basis set, charge, multiplicity, geometry and solvent of the reference."""
         general = models[i].comp_details.general
         return (len(data.MO_coeff[i]) in (1, 2)
                 and general.basis_set is not None and general.ao_names is not None
@@ -409,6 +589,24 @@ def select_reference_data(data: ExtractedData, reference_id, verbose: bool = Fal
 def test_basis_and_mo_coeff(reference_data: ReferenceData, verbose: bool = False):
     # Discretization depends on Orbkit and needs basis sets and MO coefficients.
     # Orbkit can not work if the file have both sphericals and cartesians basis set functions.
+    """Whether the basis set of the reference data can be put on a grid.
+
+    The basis set is classified as Cartesian, spherical or mixed (Gaussian 6-31G(2df):
+    Cartesian d and spherical f) from the atomic orbital names. The QMCkl backend handles
+    the three cases; the former orbkit backend cannot handle mixed basis sets.
+
+    Parameters
+    ----------
+    reference_data : ReferenceData
+    verbose : bool, optional
+
+    Returns
+    -------
+    discret_proc : bool
+        True when the grid computations can be done.
+    mo_viz_done : bool
+        Always False here (flag of the MO pictures, set later).
+    """
     discret_proc = False
     cartesian = False
     spherical = False
@@ -487,6 +685,19 @@ def test_basis_and_mo_coeff(reference_data: ReferenceData, verbose: bool = False
 # If same conformer but different charges = Fukui process
 # If same conformer but different NRE and job type = OPT_ES or FREQ_ES, related excited state
 def tests(list_data_models: List[LogData], config: Config):
+    """Run all the conformity tests and choose the reference.
+
+    Parameters
+    ----------
+    list_data_models : list of LogData
+        Parsed models (scanlog.process_logfile_list).
+    config : Config
+
+    Returns
+    -------
+    ValidatedData
+        Job types, charges, reference model index and the model used for the grids.
+    """
     verbose = config.logging.level == "debug"
     
     extracted: ExtractedData = extract_data_models(list_data_models, verbose=verbose)

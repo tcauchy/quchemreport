@@ -1,9 +1,19 @@
+"""Which computations to run, from the parts of the report asked in the YAML file.
+
+Computations on grids are long: only those needed by the requested outputs are run.
+COMPUTE_FLAG_RULES links each flag of ComputeFlags to one or more options of
+``output.include``; a flag is on when at least one of its options is true.
+"""
+
 from dataclasses import dataclass, fields
 from quchemreport.config.config import Config
 
 
 @dataclass
 class ComputeFlags:
+    """Computations to run (one boolean per computation step of data_enrichment.compute and
+    visualization_engine.generate_visualization).
+    """
     compute_molecule_representations: bool = True
     compute_all_MO_labels_and_indexes: bool = True
     compute_MO_diagrams: bool = True
@@ -53,6 +63,7 @@ COMPUTE_FLAG_RULES = {
 
 
 def get_value_from_path(root, path: str):
+    """Value of a dotted attribute path, e.g. ``"wavefunction.MEP_maps"`` of ``output.include``."""
     current = root
     for part in path.split('.'):
         current = getattr(current, part)
@@ -60,6 +71,23 @@ def get_value_from_path(root, path: str):
 
 
 def resolve_compute_flags(config: Config) -> ComputeFlags:
+    """Compute flags from the options of ``output.include``.
+
+    Parameters
+    ----------
+    config : Config
+
+    Returns
+    -------
+    ComputeFlags
+
+    Raises
+    ------
+    ValueError
+        COMPUTE_FLAG_RULES and ComputeFlags do not have the same fields (programming error).
+    RuntimeError
+        A path of COMPUTE_FLAG_RULES is not an option of the configuration.
+    """
     include = config.output.include
 
     expected_fields = {f.name for f in fields(ComputeFlags)}

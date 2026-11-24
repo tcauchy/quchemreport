@@ -1,7 +1,12 @@
+"""Text files of the spectra (columns: wavenumber in cm-1, wavelength in nm, epsilon and, for the
+CD and CPL spectra, Delta epsilon in L mol-1 cm-1), written next to the pictures.
+"""
+
 from quchemreport.utility_services import units
 
 def textfile_UV(xvalues, spectrum, file_name=None):
     # Creating a text file of the UV-vis absorption spectrum 
+    """Write ``<file_name>UV-Abso-Spectrum.txt``: absorption spectrum (epsilon)."""
     outputfile=open("{}UV-Abso-Spectrum.txt".format(file_name),"w")
     outputfile.write(" cm-1    nm    Epsilon (L.mol-1.cm-1)    \n")
     x_index = 0 
@@ -14,6 +19,7 @@ def textfile_UV(xvalues, spectrum, file_name=None):
 
 def textfile_CD(xvalues, spectrum, CDspectrum, file_name=None):
     # Creating a text file of the UV-vis absorption and circular dichroism spectra 
+    """Write ``<file_name>UV-Abso-CD-Spectrum.txt``: absorption and CD spectra."""
     outputfile=open("{}UV-Abso-CD-Spectrum.txt".format(file_name),"w")
     outputfile.write(" cm-1    nm    Epsilon (L.mol-1.cm-1)  Delta-Epsilon (L.mol-1.cm-1)    \n")
     x_index = 0 
@@ -25,6 +31,7 @@ def textfile_CD(xvalues, spectrum, CDspectrum, file_name=None):
 
 def textfile_emiUV(xvalues, spectrum, file_name=None):
     # Creating a text file of the UV-vis absorption spectrum 
+    """Write ``<file_name>UV-Emi-Spectrum.txt``: emission spectrum."""
     outputfile=open("{}UV-Emi-Spectrum.txt".format(file_name),"w")
     outputfile.write(" cm-1    nm    Epsilon (L.mol-1.cm-1)    \n")
     x_index = 0 
@@ -37,6 +44,7 @@ def textfile_emiUV(xvalues, spectrum, file_name=None):
 
 def textfile_emiCD(xvalues, spectrum, CDspectrum, file_name=None):
     # Creating a text file of the UV-vis absorption and circular dichroism spectra 
+    """Write ``<file_name>UV-Abso-CD-Emi-Spectrum.txt``: emission and CPL spectra."""
     outputfile=open("{}UV-Abso-CD-Emi-Spectrum.txt".format(file_name),"w")
     outputfile.write(" cm-1    nm    Epsilon (L.mol-1.cm-1)  Delta-Epsilon (L.mol-1.cm-1)    \n")
     x_index = 0 
