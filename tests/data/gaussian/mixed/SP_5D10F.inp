@@ -1,0 +1,13 @@
+%Chk=SP_5D10F
+%NProcShared=4
+%mem=2GB
+#p PBE1PBE/6-31G(2df) 5D 10F pop=full gfprint td=(nstates=3)
+
+SP_5D10F
+
+0 1
+C 0.000 0.000 -0.530
+O 0.000 0.000 0.680
+H 0.000 0.940 -1.120
+H 0.000 -0.940 -1.120
+

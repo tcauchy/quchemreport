@@ -222,6 +222,13 @@ def test_nuclear_repulsion(data: ExtractedData):
     
 
 
+SINGLE_POINTS_ONLY = (
+    "ERROR: all the log files are single points (type sp). The report needs the optimization "
+    "(type opt, or [opt, freq]) of the ground state as reference; single points of the cation "
+    "and anion (Fukui functions, CDFT indices) must be computed at this optimized geometry. "
+    "Program will exit.")
+
+
 def test_charge(data: ExtractedData):
     if (len(set(data.charges_noSP))) > 1:
         print("\tDetected charges (No single points):             ... ", len(set(data.charges_noSP)))
@@ -230,7 +237,7 @@ def test_charge(data: ExtractedData):
         print("Program will exit.")
         sys.exit(1)
     elif  (len (set(data.charges_noSP))) == 0 :
-        print("ERROR: There is no correct charges in the list. Program will exit. Contact admin")
+        print(SINGLE_POINTS_ONLY)
         sys.exit(1)
     else:
         print("\tSame charge for all logfiles:                    ...  Test OK")
@@ -247,7 +254,7 @@ def test_multiplicity(data: ExtractedData):
         print("Program will exit.")
         sys.exit(1)
     elif  (len(set(data.multiplicities_noSP))) == 0 :
-        print("ERROR: There is no correct multiplicity in the list. Program will exit. Contact admin")
+        print(SINGLE_POINTS_ONLY)
         sys.exit(1)
     else:
         print("\tSame multiplicity:                               ...  Test OK")
@@ -445,7 +452,12 @@ def test_basis_and_mo_coeff(reference_data: ReferenceData, verbose: bool = False
                 if verbose:
                     print("Basis set with s functions only")
         if (cartesian is True) and (spherical is True) :
-            discret_proc = False      
+            # Mixed basis sets (Gaussian 6-31G(2df): Cartesian d, spherical f; 5D 10F) are
+            # handled shell by shell by the qmckl backend, not by orbkit.
+            from quchemreport.data_enrichment.calc_orb import _use_qmckl
+            discret_proc = _use_qmckl()
+            if discret_proc and verbose:
+                print("Mixed Cartesian/spherical basis set detected")
         elif (cartesian is True) and (spherical is False) :
             discret_proc = True
             if verbose:
@@ -460,7 +472,7 @@ def test_basis_and_mo_coeff(reference_data: ReferenceData, verbose: bool = False
         if discret_proc is True :
             print("All discretization tests OK.")
         else :
-            print("The basis set is a mixture of cartesian and spherical atomic orbitals. Discretization cannot be done.")
+            print("The basis set is a mixture of cartesian and spherical atomic orbitals: the orbkit backend cannot discretize it (use the default qmckl backend).")
             
     return discret_proc, mo_viz_done
 

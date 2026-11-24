@@ -7,7 +7,7 @@ import numpy as np
 
 from quchemreport.data_enrichment import qmckl_backend as qb
 
-EXAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples")
+from tests.datafiles import log
 
 
 def model_from_log(path, package="gaussian"):
@@ -49,7 +49,7 @@ class HarmonicsTests(unittest.TestCase):
 
 class WavefunctionTests(unittest.TestCase):
     def check_log(self, name, electrons):
-        model = model_from_log(os.path.join(EXAMPLES, name))
+        model = model_from_log(log("gaussian/h2o/" + name))
         wf = qb.Wavefunction(model)
         X, Y, Z = wf.grid(0.1, over_s=5)
         d3r = 0.1 ** 3
@@ -71,7 +71,7 @@ class WavefunctionTests(unittest.TestCase):
 class ReducedGridTests(unittest.TestCase):
     def test_nto_pair_reduction_takes_every_kth_point(self):
         from quchemreport.data_enrichment import calc_orb
-        model = model_from_log(os.path.join(EXAMPLES, "H2O_OPT_basis2.log"))
+        model = model_from_log(log("gaussian/h2o/H2O_OPT_basis2.log"))
         n = model.comp_details.general.basis_set_size
         rng = np.random.default_rng(0)
         hole, electron = rng.normal(size=n), rng.normal(size=n)

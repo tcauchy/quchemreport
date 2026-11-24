@@ -1,31 +1,31 @@
 """Regression tests for the corrections of the code review of 20/11/2026 (H2O examples).
 
-Run: OMP_NUM_THREADS=4 PYTHONPATH=.:/applis/cclib/lib/python3.12/site-packages \
-     xvfb-run -a $ENV -m unittest tests.test_corrections_revue
+Run (see tests/README.md): xvfb-run -a $ENV -m pytest tests/test_corrections_revue.py
 """
 import contextlib
 import io
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EX = os.path.join(ROOT, "examples")
 
 from quchemreport.config.config import Config
 from quchemreport.parser_engine.scanlog import process_logfile_list
 import quchemreport.quality_check_engine.conformity as conformity
 from quchemreport.data_enrichment import calc_orb, compute, qmckl_backend
 from quchemreport.utility_services.computed_data import init_computed_data
+from tests.datafiles import log
 
 def parse(files):
     """files: list of (file name, type[, reference]) -> (config, models, validated data)."""
     with open(os.path.join(ROOT, "example.yaml")) as fd:
         cfg = yaml.safe_load(fd)
-    cfg["logfiles"] = [dict(path=os.path.join(EX, f), type=t, **({"reference": True} if ref else {}))
+    cfg["logfiles"] = [dict(path=log("gaussian/h2o/" + f), type=t, **({"reference": True} if ref else {}))
                        for f, t, ref in files]
     config = Config(**cfg)
     with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
@@ -76,7 +76,10 @@ class CorrectionsTest(unittest.TestCase):
 
     def test_mep_matches_direct_sum(self):
         step = 0.4
-        with contextlib.redirect_stdout(io.StringIO()):
+        # At this coarse step every core is badly sampled: check the convolution alone,
+        # without the core spheres (tested in test_real_calculations.test_mep_core_spheres).
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(calc_orb, "CORE_CHARGE_TOLERANCE", np.inf):
             rho, mep, X, Y, Z, raw = calc_orb.Potential(self.opt, grid_step=step, nproc=2)
         geo = qmckl_backend.Wavefunction(self.opt).geometry
         charges = np.array(self.opt.molecule.atoms_Z, float)

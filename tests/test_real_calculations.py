@@ -1,0 +1,333 @@
+"""Tests on real Gaussian 09 / ORCA 6.1 calculations (tests/data), 23/11/2026.
+
+Defects found on these calculations are marked xfail (strict) until they are fixed:
+  1 ECP: MEP with the full nuclear charge     5 report with single points only
+  2 mixed 6D/7F and 5D/10F basis sets          6 NTO skipped with ORCA (TD orbitals)
+  3 TD without excitation amplitudes           7 state numbering per multiplicity
+  4 TD without rotatory strengths              8 NTO names without the multiplicity
+
+Run (see tests/README.md): tests/run_tests.sh all -k real_calculations
+"""
+import contextlib
+import io
+import re
+
+import numpy as np
+import pytest
+
+from quchemreport.data_enrichment import calc_orb
+from quchemreport.data_enrichment import qmckl_backend as qb
+from tests.helpers import read_steps, run_report, without_lines
+
+
+def defect(number, reason):
+    return pytest.mark.xfail(strict=True, reason=f"defect {number} of 23/11/2026: {reason}")
+
+
+# --------------------------------------------------------------------------- ECP (defect 1)
+
+ECP_LOGS = [  # log, solver, core electrons, valence electrons
+    ("gaussian/ch3i/OPT.log", "gaussian", [0, 46, 0, 0, 0], 16),
+    ("gaussian/ch2bri/CH2BrI_pseudoread.log", "gaussian", [0, 28, 46, 0, 0], 22),
+    ("gaussian/ch2bri/CH2BrI_iop.log", "gaussian", [0, 28, 46, 0, 0], 22),
+    ("orca6/ch3i/OPT.out", "orca", [0, 28, 0, 0, 0], 34),
+]
+
+
+@pytest.mark.parametrize("path, solver, core, valence", ECP_LOGS)
+def test_ecp_core_electrons_and_occupations(path, solver, core, valence):
+    """Needs cclib with the patch of cclib/cclib#1972 (installed in /applis/cclib)."""
+    model = read_steps(path, solver)[-1]
+    assert list(model.comp_details.general.core_electrons_per_atoms) == core
+    occupations = qb.occupations(model, 200)
+    assert sum(o.sum() for o in occupations) == valence
+
+
+@pytest.mark.parametrize("path, solver, core, valence", [e for e in ECP_LOGS if "ch3i" in e[0]])
+def test_ecp_mep(path, solver, core, valence):
+    """Defect 1 (fixed): nuclei seen with Z - core electrons, density of the valence electrons.
+    Validated against Gaussian's cubegen potential (LANL2DZ): RMS 0.0006 a.u. on the 0.002 a.u.
+    iso-density surface (see test_mep_against_gaussian)."""
+    model = read_steps(path, solver)[-1]
+    np.testing.assert_array_equal(calc_orb.nuclear_charges(model), np.array([6, 53, 1, 1, 1]) - core)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rho, mep, X, Y, Z, _ = calc_orb.Potential(model, grid_step=0.25, nproc=4)
+    assert np.sum(rho) * 0.25 ** 3 == pytest.approx(valence, abs=0.01)
+    assert mep.min() < -0.005      # negative belt around iodine
+
+
+@pytest.mark.parametrize("path, solver", [
+    ("gaussian/h2o/H2O_OPT.log", "gaussian"), ("gaussian/small/O2_ROHF.log", "gaussian"),
+    ("gaussian/h2o/H2O_OPT_unrestricted.log", "gaussian"), ("gaussian/h2co/SPplus.log", "gaussian"),
+    ("orca6/h2co/SPminus.out", "orca"), ("gaussian/ch3i/OPT.log", "gaussian"), ("orca6/ch3i/OPT.out", "orca"),
+])
+def test_electron_count_is_consistent(path, solver):
+    assert calc_orb.electron_count_error(read_steps(path, solver)[-1]) is None
+
+
+def test_electron_count_detects_unread_core_electrons():
+    """ECP core electrons not read (cclib without the patch of cclib/cclib#1972): MEP/Fukui skipped."""
+    model = read_steps("gaussian/ch3i/OPT.log")[-1]
+    model.comp_details.general.core_electrons_per_atoms = [0] * 5
+    assert "16 electrons" in calc_orb.electron_count_error(model)
+
+
+# ------------------------------------------------------------------- mixed basis (defect 2)
+
+@pytest.mark.parametrize("path", ["gaussian/mixed/OPT_6D7F.log", "gaussian/mixed/SP_5D10F.log"])
+def test_mixed_basis(path):
+    """Defect 2 (fixed): spherical or Cartesian is decided shell by shell."""
+    model = read_steps(path)[-1]
+    wf = qb.Wavefunction(model, nproc=4)
+    X, Y, Z = wf.grid(0.07, over_s=5)       # fine enough for the 1s orbitals of C and O
+    d3r = 0.07 ** 3
+    mos = wf.mo(list(range(10)), 0, X, Y, Z)
+    overlap = np.array([[np.sum(a * b) * d3r for b in mos] for a in mos])
+    np.testing.assert_allclose(overlap, np.eye(10), atol=2e-3)
+    assert np.sum(wf.density(X, Y, Z)) * d3r == pytest.approx(16, abs=0.01)
+
+
+# -------------------------------------------------------------- single points (defect 5)
+
+def test_single_points_only_explain_that_an_optimization_is_needed(tmp_path):
+    """Defect 5 (fixed): the stop stays (Thomas: an OPT reference is needed) with a clear message."""
+    import yaml
+    from quchemreport.config.config import Config
+    from quchemreport.parser_engine.scanlog import process_logfile_list
+    import quchemreport.quality_check_engine.conformity as conformity
+    from tests.helpers import report_config
+    cfg = report_config([{"path": "gaussian/h2co/SPplus.log", "type": "sp", "reference": True},
+                         {"path": "gaussian/h2co/SPminus.log", "type": "sp"}])
+    config = Config(**yaml.safe_load(yaml.safe_dump(cfg)))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), pytest.raises(SystemExit) as stop:
+        _, models = process_logfile_list(config, log_storage_path=str(tmp_path))
+        conformity.tests(models, config)
+    assert stop.value.code == 1
+    assert "Contact admin" not in out.getvalue()
+    assert "all the log files are single points" in out.getvalue() and "type opt" in out.getvalue()
+
+
+# ------------------------------------------------------- state labels (defects 7 and 8)
+
+def test_state_labels_per_multiplicity():
+    """Defect 7 (fixed): states numbered within each multiplicity, in the order of the log."""
+    from quchemreport.utility_services.naming import state_labels
+    orca = read_steps("orca6/h2co/TD_T.out", "orca")[-1]       # singlets and triplets, energy order
+    assert state_labels(orca.results.excited_states.et_sym) == \
+        ["T1", "S1", "T2", "T3", "T4", "S2", "T5", "S3", "S4", "S5"]
+    gaussian = read_steps("gaussian/h2co/TD_T.log")[-1]
+    assert state_labels(gaussian.results.excited_states.et_sym) == [f"T{i}" for i in range(1, 6)]
+    assert state_labels(["3.002-A", "3.010-B"]) == ["1", "2"]     # unrestricted: global number
+
+
+# -------------------------------------------------- structure warnings (ORCA 6.1, Gaussian)
+
+def _warnings(models):
+    from quchemreport.data_enrichment import compute
+    from quchemreport.report_generator.generate_report import quality_warnings
+    from quchemreport.utility_services.computed_data import init_computed_data
+    computed = init_computed_data(len(models))
+    with contextlib.redirect_stdout(io.StringIO()):
+        compute.extract_simple_data(models, models[0], computed)
+    return quality_warnings(computed)
+
+
+@pytest.mark.parametrize("path, solver, text", [
+    ("gaussian/hcn_ts/OPT_FREQ.log", "gaussian", "1157.2i"),
+    ("orca6/nh3_plan/OPT_FREQ.out", "orca", "830.2i"),
+    ("orca6/maxiter/H2O_maxiter.out", "orca", "did not converge"),
+])
+def test_structure_warnings(path, solver, text):
+    assert any(text in w for w in _warnings(read_steps(path, solver)))
+
+
+# ------------------------------------------------------------------- full reports (slow)
+
+H2CO = {
+    "gaussian": [("gaussian/h2co/OPT.log", "opt"), ("gaussian/h2co/FREQ.log", "freq"),
+                 ("gaussian/h2co/TD.log", "td"), ("gaussian/h2co/TD_T.log", "td"),
+                 ("gaussian/h2co/OPT_ES1.log", "opt_es"), ("gaussian/h2co/OPT_ET1.log", "opt_es"),
+                 ("gaussian/h2co/SPplus.log", "sp"), ("gaussian/h2co/SPminus.log", "sp")],
+    "orca": [("orca6/h2co/OPT_FREQ.out", ["opt", "freq"]), ("orca6/h2co/TD.out", "td"),
+             ("orca6/h2co/TD_T.out", "td"), ("orca6/h2co/OPT_ES1.out", "opt_es"),
+             ("orca6/h2co/OPT_ET1.out", "opt_es"), ("orca6/h2co/SPplus.out", "sp"),
+             ("orca6/h2co/SPminus.out", "sp")],
+}
+
+
+def _logfiles(entries):
+    out = []
+    for i, (path, kind) in enumerate(entries):
+        entry = {"path": path, "type": kind}
+        if i == 0:
+            entry["reference"] = True
+        if kind == "opt_es":
+            entry["excited_state_number"] = 1
+        out.append(entry)
+    return out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("solver", ["gaussian", "orca"])
+def test_h2co_full_report(solver):
+    report = run_report(_logfiles(H2CO[solver]), solver,
+                        **{"output.include.wavefunction.MEP_maps": True,
+                           "output.include.reactivity.CDFT_indices": True,
+                           "output.include.reactivity.fukui_functions": True,
+                           "output.include.optimized_excited_states.transitions": True,
+                           "output.include.optimized_excited_states.electron_density_difference": True})
+    assert report.returncode == 0, report.output[-3000:]
+    for pattern in ("MO-homo", "MEP", "fukui-SP_plus", "fukui-SP_minus", "Fdual", "emi-EDD-S1", "emi-EDD-T1"):
+        assert report.images(pattern), pattern
+    assert len(report.images("-EDD-T")) >= 5
+
+
+def _td_without_amplitudes():
+    return without_lines("gaussian/h2co/TD.log", lambda l: re.match(r"^ +\d+[AB]? *(->|<-) *\d+[AB]? +-?\d+\.\d+", l),
+                         "TD_without_amplitudes.log")
+
+
+def _td_without_rotatory_strengths():
+    state = {"skip": False}
+
+    def drop(line):
+        if "Rotatory Strengths" in line:
+            state["skip"] = True
+            return True
+        if state["skip"] and re.match(r"^\s+(state|\d+)\s", line):
+            return True
+        state["skip"] = False
+        return False
+    return without_lines("gaussian/h2co/TD.log", drop, "TD_without_rotatory_strengths.log")
+
+
+@pytest.mark.slow
+def test_td_without_amplitudes():
+    """Defect 3 (fixed): formerly a crash in qmckl with empty amplitude lists."""
+    report = run_report([{"path": "gaussian/h2co/OPT.log", "type": "opt", "reference": True},
+                         {"path": _td_without_amplitudes(), "type": "td"}])
+    assert report.returncode == 0, report.output[-3000:]
+    assert "amplitudes" in report.output
+    assert not report.images("EDD")
+    assert report.images("UV-Abso-Spectrum")
+
+
+@pytest.mark.slow
+def test_td_without_rotatory_strengths():
+    """Defect 4 (fixed): formerly an IndexError in the transition table; no R column now."""
+    report = run_report([{"path": "gaussian/h2co/OPT.log", "type": "opt", "reference": True},
+                         {"path": _td_without_rotatory_strengths(), "type": "td"}])
+    assert report.returncode == 0, report.output[-3000:]
+    assert len(report.images("EDD-S")) == 5
+    assert "R (" not in report.tex and "Rotatory" not in report.tex
+
+
+@pytest.mark.slow
+def test_orca_nto_from_the_td_orbitals():
+    """Defect 6 (fixed): the EDD and NTO of a TD use its own orbitals at the reference geometry."""
+    report = run_report([{"path": "orca6/h2co/OPT_FREQ.out", "type": ["opt", "freq"], "reference": True},
+                         {"path": "orca6/h2co/TD.out", "type": "td"}], "orca",
+                        **{"output.include.excited_states.natural_transition_orbitals.enabled": True})
+    assert report.returncode == 0, report.output[-3000:]
+    assert report.images("NTO-S1-pair1-MO-hole")
+
+
+@pytest.mark.slow
+def test_orca_singlet_triplet_edd_names():
+    """Defect 7 (fixed): EDD of an ORCA singlet+triplet TD named S1-S5 and T1-T5."""
+    report = run_report([{"path": "orca6/h2co/OPT_FREQ.out", "type": ["opt", "freq"], "reference": True},
+                         {"path": "orca6/h2co/TD_T.out", "type": "td"}], "orca")
+    assert report.returncode == 0, report.output[-3000:]
+    names = {re.search(r"EDD-([ST]\d+)\.png", f).group(1) for f in report.images("EDD-")}
+    assert names == {f"S{i}" for i in range(1, 6)} | {f"T{i}" for i in range(1, 6)}
+
+
+@pytest.mark.slow
+def test_triplet_nto_names():
+    """Defect 8 (fixed): NTO named and captioned with the multiplicity (T1, not state 1)."""
+    report = run_report([{"path": "gaussian/h2co/OPT.log", "type": "opt", "reference": True},
+                         {"path": "gaussian/h2co/TD_T.log", "type": "td"}],
+                        **{"output.include.excited_states.natural_transition_orbitals.enabled": True})
+    assert report.returncode == 0, report.output[-3000:]
+    assert report.images("NTO-T1-pair1-MO-hole")
+    assert not report.images("NTO-S")
+    assert "NTO T1" in report.tex
+
+
+@pytest.mark.slow
+def test_mixed_basis_full_report():
+    """Defect 2 (fixed): MO and EDD pictures with a 6D 7F basis set (formerly a crash)."""
+    report = run_report([{"path": "gaussian/mixed/OPT_6D7F.log", "type": "opt", "reference": True},
+                         {"path": "gaussian/mixed/TD_6D7F.log", "type": "td"}])
+    assert report.returncode == 0, report.output[-3000:]
+    assert report.images("MO-homo") and len(report.images("EDD-S")) == 3
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("path, solver", [("gaussian/ch3i/OPT.log", "gaussian"), ("orca6/ch3i/OPT.out", "orca")])
+def test_ecp_full_report(path, solver):
+    """Defect 1 (fixed): MEP of CH3I with an ECP on iodine."""
+    report = run_report([{"path": path, "type": "opt", "reference": True}], solver,
+                        **{"output.include.wavefunction.MEP_maps": True})
+    assert report.returncode == 0, report.output[-3000:]
+    assert report.images("MEP") and "MEP map skipped" not in report.output
+
+
+# ------------------------------------------------- MEP against Gaussian (defects 1, 10, 11)
+
+def _mep_error(path, reference, step=0.1):
+    """RMS difference and correlation between our MEP and Gaussian's cubegen potential at the
+    400 points of tests/data/mep_reference/<reference>.txt (0.002 a.u. iso-density surface)."""
+    from scipy.interpolate import RegularGridInterpolator
+    from tests.datafiles import DATA
+    ref = np.loadtxt(f"{DATA}/mep_reference/{reference}.txt")
+    model = read_steps(path)[-1]
+    with contextlib.redirect_stdout(io.StringIO()):
+        _, mep, X, Y, Z, _ = calc_orb.Potential(model, grid_step=step, nproc=4)
+    ours = RegularGridInterpolator((X[:, 0, 0], Y[0, :, 0], Z[0, 0, :]), mep)(ref[:, :3])
+    return np.sqrt(np.mean((ours - ref[:, 3]) ** 2)), np.corrcoef(ours, ref[:, 3])[0, 1]
+
+
+@pytest.mark.parametrize("path, reference", [
+    ("gaussian/h2co/OPT.log", "h2co"),
+    ("gaussian/ch3i_mep/SP_LANL2DZ.log", "ch3i_lanl2dz"),        # defect 1 (ECP), fixed
+    ("gaussian/ch3i_mep/SP_DGDZVP.log", "ch3i_dgdzvp"),           # defect 11, fixed
+    ("gaussian/ch3x_mep/SP_CH3Cl.log", "ch3cl"),                  # defect 11, fixed
+    ("gaussian/ch3x_mep/SP_CH3Br.log", "ch3br"),                  # defect 11, fixed
+])
+def test_mep_against_gaussian(path, reference):
+    rms, corr = _mep_error(path, reference)
+    assert rms < 0.002 and corr > 0.999, (rms, corr)
+
+
+@pytest.mark.parametrize("path, cores", [
+    ("gaussian/h2co/OPT.log", []),
+    ("gaussian/ch3i_mep/SP_LANL2DZ.log", []),     # ECP: no core density
+    ("gaussian/ch3i_mep/SP_DGDZVP.log", [53]),    # all-electron iodine
+    ("gaussian/ch3x_mep/SP_CH3Cl.log", [17]),
+])
+def test_mep_core_spheres(path, cores):
+    """Defect 11 (fixed): only the cores that the grid samples badly are integrated apart, so
+    that the MEP of light molecules is computed exactly as before. At step 0.075 the grid
+    misses 0.09 of the 7.96 electrons within 0.5 bohr of Cl, 1.4 of the 28.6 of I."""
+    model = read_steps(path)[-1]
+    with contextlib.redirect_stdout(io.StringIO()):
+        wf = qb.Wavefunction(model, nproc=4)
+        X, Y, Z = wf.grid(0.075)
+        axes = [X[:, 0, 0], Y[0, :, 0], Z[0, 0, :]]
+        rho = wf.density(X, Y, Z)
+        found = calc_orb._badly_sampled_cores(wf, axes, rho, 0.075 ** 3)
+    assert [model.molecule.atoms_Z[i] for i, _, _ in found] == cores
+    for i, charge, mask in found:   # exact charge within CORE_RADIUS, close to the grid's
+        assert 0.0 < charge < model.molecule.atoms_Z[i]
+        assert abs(charge - rho[mask].sum() * 0.075 ** 3) < 2.0
+
+
+def test_mo_energies_below_the_printed_format():
+    """Defect 10 (fixed): the 1s energy of iodine (all-electron) is printed '**********' by
+    Gaussian; the MO energies were lost (None) and the density crashed."""
+    model = read_steps("gaussian/ch3i_mep/SP_DGDZVP.log")[-1]
+    energies = model.results.wavefunction.MO_energies[0]
+    assert energies[0] == -np.inf and np.isfinite(energies[1:]).all()
+    assert qb.occupations(model, len(energies))[0].sum() == 62

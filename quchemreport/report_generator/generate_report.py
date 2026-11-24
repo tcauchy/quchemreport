@@ -12,7 +12,7 @@ from quchemreport.config.config import Config, OutputInclude
 from quchemreport.utility_services.computed_data import ComputedData, config_logfile
 from quchemreport.utility_services.parameters import THRESHOLD_IR_INTENSITIES
 from quchemreport.utility_services.units import nm_to_wnb, Eh_to_Kcal_mol
-from quchemreport.utility_services.naming import spin_letter
+from quchemreport.utility_services.naming import spin_letter, state_label, state_number
 
 # TODO : NEED TO THINK ABOUT THE MAX VALUE
 MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE = 15
@@ -1293,67 +1293,6 @@ def fill_reactivity_section(doc, output_dir, computed_data: ComputedData, report
         doc.append(section)
 
 
-def select_excited_states_indices(computed_data: ComputedData, log_idx, selection_mode="dominant_only", n=5, osc_threshold=0.1, rot_threshold=10):
-    """
-    Select excited states indices based on the selection mode.
-    
-    - "dominant_only" : only select states with significant oscillator strength (osc > osc_threshold) or rotation (R > rot_threshold)
-    - "first_n" : take the first n states
-    - "all_states" : take all available excited states
-    """
-    
-    et_energies = computed_data.results.excited_states.et_energies[log_idx]
-    oscs = computed_data.results.excited_states.et_oscs[log_idx]
-    rots = computed_data.results.excited_states.et_rot[log_idx]
-    
-    if (
-        et_energies == None
-        or (
-            selection_mode == "dominant_only"
-            and (
-                oscs == None
-                or rots == None
-            )
-        )
-    ): 
-        return []
-    
-    n_states = len(et_energies)
-
-    if selection_mode == "all_states":
-        return list(range(n_states))
-    
-    elif selection_mode == "first_n":
-        return list(range(min(n, n_states)))
-
-    elif selection_mode == "dominant_only":
-        selected = []
-
-        for i in range(n_states):
-            if i < 5:
-                selected.append(i)
-                continue
-
-            osc_i = oscs[i]
-            if osc_i is not None and osc_i > osc_threshold:
-                selected.append(i)
-                continue
-
-            rot_i = rots[i]
-            if rot_i == "N/A":
-                selected.append(i)
-                continue
-            try:
-                if abs(float(rot_i)) > rot_threshold:
-                    selected.append(i)
-            except (ValueError, TypeError):
-                pass
-
-        return sorted(set(selected))
-    
-    else:
-        raise ValueError(f"Unknown selection_mode: {selection_mode}")
-
 def build_CIS_string(transitions, homo_ind, filter_threshold=5):
     CIS = ""
     for ST in transitions:
@@ -1386,11 +1325,12 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
         homo_ind == None
         or et_energies == None
         or et_oscs == None
-        or et_rot == None
         or et_transitions == None
         or et_sym == None
     ):
         return False
+    # Rotatory strengths are optional (not printed by every program/version): no R column then.
+    has_rot = et_rot is not None and len(et_rot) == len(et_energies)
     
     if is_optimized:
         Tozer_lambda = computed_data.derived.optimized_excited_states.Tozer_lambda[log_idx]
@@ -1424,7 +1364,8 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
 
     doc.append(NoEscape(r'\begin{center}'))
     
-    ncols = 10 if use_full else 7
+    ncols = (10 if use_full else 7) - (0 if has_rot else 1)
+    r_header = ["R"] if has_rot else []
 
     table_format = 'r' * (ncols - 1) + 'p{6cm}'
     with doc.create(Tabular(table_format)) as es_transitions_table:
@@ -1433,12 +1374,12 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
         es_transitions_table.add_hline()
         if use_full:
             es_transitions_table.add_row(["E.S.", "Symmetry", "nm", NoEscape(r"cm$^{-1}$"),
-                            italic("f"), "R", NoEscape(r"$\Lambda$"),
+                            italic("f"), *r_header, NoEscape(r"$\Lambda$"),
                             NoEscape(r"d$_{CT}$"), NoEscape(r"q$_{CT}$"),
                             "Excitation description in %"])
         else:
             es_transitions_table.add_row(["E.S.", "Symmetry", "nm", NoEscape(r"cm$^{-1}$"),
-                            italic("f"), "R", "Excitation description in %"])
+                            italic("f"), *r_header, "Excitation description in %"])
         es_transitions_table.add_hline()
 
         if indices is None:
@@ -1449,8 +1390,8 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
             energy = et_energies[idx] if et_energies[idx] is not None else 0.0
             nm_val = et_nm[idx] if et_nm[idx] is not None else 0
             osc = et_oscs[idx]
-            rot = et_rot[idx]
-            rot_val = rot if rot is not None else "N/A"
+            if has_rot:
+                rot_val = et_rot[idx] if et_rot[idx] is not None else "N/A"
 
             if use_full:
                 lambda_val = Tozer_lambda[idx]
@@ -1469,14 +1410,19 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
             trans = et_transitions[idx]
             CIS = build_CIS_string(trans, homo_ind, filter_threshold=0 if is_optimized else 5)
 
+            # S<n>/T<n> within the multiplicity (as the images), with the number of the log
+            # when it differs (TD with singlets and triplets)
+            number = state_number(et_sym, idx)
+            es_label = f"{spin_letter(et_sym[idx])}{number}" + (f" ({idx + 1})" if number != idx + 1 else "")
             row = [
-                (idx + 1),
+                es_label,
                 et_sym[idx],
                 f"{int(nm_val)}",
                 f"{int(energy)}",
                 f"{osc:.3f}",
-                f"{rot_val}"
             ]
+            if has_rot:
+                row.append(f"{rot_val}")
 
             if use_full:
                 row += [
@@ -1589,10 +1535,12 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
         for k in range(len(et_transitions)):
             # viz_EDD names the files EDD-S<n> (singlet), EDD-T<n> (triplet), EDD-<n> (other states,
             # e.g. unrestricted), see utility_services.naming
-            letter = spin_letter(et_sym[k]) if et_sym is not None and k < len(et_sym) else ""
-            state = f"{letter}{k+1}" if letter else f"state {k+1}"
-            nomPng = f"img-log{log_idx+1}-EDD-{letter}{k+1}.png"
-            nomPng_cam2 = f"img-log{log_idx+1}-EDD-{letter}{k+1}_cam2.png"
+            known = et_sym is not None and k < len(et_sym)
+            letter = spin_letter(et_sym[k]) if known else ""
+            number = state_number(et_sym, k) if known else k + 1
+            state = f"{letter}{number}" if letter else f"state {number}"
+            nomPng = f"img-log{log_idx+1}-EDD-{letter}{number}.png"
+            nomPng_cam2 = f"img-log{log_idx+1}-EDD-{letter}{number}_cam2.png"
             
             if (os.path.isfile(output_dir + nomPng)) :
                 if (os.path.isfile(output_dir + nomPng_cam2)) :
@@ -1623,11 +1571,15 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
 def render_es_nto(section, output_dir, computed_data, report_type):
     added = False
     for log_idx, states in enumerate(computed_data.derived.excited_states.nto_pairs):
+        et_sym = computed_data.results.excited_states.et_sym[log_idx]
         for state in states or []:
             if not state["pairs"]:
                 continue
             added = True
-            section.append(f"Natural transition orbitals, state {state['state']} "
+            # S<n> / T<n> as for the EDD (utility_services.naming); <n> for other states
+            label = state_label(et_sym, state["state"] - 1) if et_sym else str(state["state"])
+            name = label if label[0] in "ST" else f"state {label}"
+            section.append(f"Natural transition orbitals, {name} "
                            f"(source: {computed_data.metadata.log_files[log_idx]}). "
                            "Weights are normalized over the printed excitation amplitudes X; "
                            "de-excitation amplitudes Y are excluded. Missing printed coefficients "
@@ -1642,10 +1594,10 @@ def render_es_nto(section, output_dir, computed_data, report_type):
                                         "calculation with a lower printing threshold "
                                         "(Gaussian: IOp(9/40=4); ORCA: TPrint in the %tddft block). "))
             for pair_idx, pair in enumerate(state["pairs"], 1):
-                caption = (f"NTO state {state['state']}, pair {pair_idx}, {pair['spin']} spin, "
+                caption = (f"NTO {name}, pair {pair_idx}, {pair['spin']} spin, "
                            f"weight {100 * pair['weight']:.2f}%. Hole (left), electron (right). "
                            "Green and gold show opposite orbital phases; their absolute signs are arbitrary.")
-                prefix = f"img-log{log_idx+1}-NTO-S{state['state']}-pair{pair_idx}"
+                prefix = f"img-log{log_idx+1}-NTO-{label}-pair{pair_idx}"
                 hole, electron = prefix + "-MO-hole.png", prefix + "-MO-electron.png"
                 if report_type != "text" and os.path.isfile(output_dir + hole) and os.path.isfile(output_dir + electron):
                     figure_two_col(section, hole, electron, caption=caption)
@@ -1803,11 +1755,12 @@ def render_optimized_es_EDD(section, output_dir, computed_data: ComputedData, co
         if et_sym is None or not 0 < emi_state <= len(et_sym):
             continue
         letter = spin_letter(et_sym[emi_state - 1])
-        state = f"{letter}{emi_state}" if letter else f"state {emi_state}"
+        number = state_number(et_sym, emi_state - 1)
+        state = f"{letter}{number}" if letter else f"state {number}"
         
         # figure with EDD for emission (named by output_optimized_es_EDD_DIP)
-        imgNamePng = f"img-log{log_idx}-emi-EDD-{letter}{emi_state}.png" 
-        imgNamePng2 = f"img-log{log_idx}-emi-EDD-{letter}{emi_state}_cam2.png" 
+        imgNamePng = f"img-log{log_idx}-emi-EDD-{letter}{number}.png" 
+        imgNamePng2 = f"img-log{log_idx}-emi-EDD-{letter}{number}_cam2.png" 
         if (not os.path.isfile(output_dir + imgNamePng)) :
             continue
         

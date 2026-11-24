@@ -1,0 +1,9 @@
+%nprocshared=2
+# ROB3LYP/6-31G(d) pop=full gfprint
+
+O2 triplet ROHF
+
+0 3
+O 0.0 0.0 0.0
+O 0.0 0.0 1.21
+

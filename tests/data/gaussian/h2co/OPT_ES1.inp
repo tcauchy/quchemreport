@@ -1,0 +1,10 @@
+%Chk=OPT_ES1
+%NProcShared=4
+%mem=2GB
+#p PBE1PBE/6-31G(d) pop=full gfprint td=(nstates=5,root=1) opt geom=check guess=read
+
+OPT_ES1
+
+0 1
+
+

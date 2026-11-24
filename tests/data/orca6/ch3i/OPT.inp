@@ -1,0 +1,14 @@
+! PBE0 def2-SVP Opt
+%pal nprocs 1 end
+%maxcore 2000
+%output
+ Print[ P_Basis ] 2
+ Print[ P_MOs ] 1
+end
+* xyz 0 1
+C 0.000 0.000 0.000
+I 0.000 0.000 2.150
+H 1.030 0.000 -0.360
+H -0.515 0.892 -0.360
+H -0.515 -0.892 -0.360
+*

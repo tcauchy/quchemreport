@@ -1,0 +1,13 @@
+! B3LYP def2-SVP Opt Freq
+%pal nprocs 1 end
+%maxcore 2000
+%output
+ Print[ P_Basis ] 2
+ Print[ P_MOs ] 1
+end
+* xyz 0 1
+N 0.000 0.000 0.000
+H 1.010 0.000 0.000
+H -0.505 0.875 0.000
+H -0.505 -0.875 0.000
+*

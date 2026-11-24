@@ -1,0 +1,13 @@
+%Chk=OPT
+%NProcShared=4
+%mem=2GB
+#p PBE1PBE/6-31G(d) pop=full gfprint opt
+
+OPT
+
+0 1
+C 0.000 0.000 -0.530
+O 0.000 0.000 0.680
+H 0.000 0.940 -1.120
+H 0.000 -0.940 -1.120
+

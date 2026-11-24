@@ -1,0 +1,14 @@
+%Chk=SP_CH3Br
+%NProcShared=8
+%mem=4GB
+#p PBE1PBE/6-31G(d) pop=full gfprint nosymm
+
+CH3Br all-electron (MEP core test, defect 11)
+
+0 1
+C 0.000000 0.000000 0.000000
+Br 0.000000 0.000000 1.940
+H 1.027000 0.000000 -0.363000
+H -0.513500 0.889400 -0.363000
+H -0.513500 -0.889400 -0.363000
+

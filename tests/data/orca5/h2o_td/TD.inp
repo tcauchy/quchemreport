@@ -1,0 +1,12 @@
+! PBE0 6-311+G(2d,p) RIJCOSX
+%pal nprocs 1 end
+%output
+ Print[ P_Basis ] 2
+ Print[ P_OrbEn ] 2
+ Print[ P_MOs ] 1
+end
+%tddft
+ nroots 3
+ printlevel 3
+end
+* xyzfile 0 1 coords.xyz

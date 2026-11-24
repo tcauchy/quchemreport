@@ -1,0 +1,11 @@
+%nprocshared=2
+# B3LYP/6-31G(d) opt freq pop=full gfprint
+
+NH3 planar (D3h saddle point)
+
+0 1
+N  0.000000  0.000000  0.000000
+H  1.010000  0.000000  0.000000
+H -0.505000  0.874686  0.000000
+H -0.505000 -0.874686  0.000000
+

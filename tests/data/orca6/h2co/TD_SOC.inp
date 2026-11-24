@@ -1,0 +1,13 @@
+! PBE0 def2-SVP
+%pal nprocs 1 end
+%maxcore 2000
+%output
+ Print[ P_Basis ] 2
+ Print[ P_MOs ] 1
+end
+%tddft
+ nroots 5
+ dosoc true
+ printlevel 3
+end
+* xyzfile 0 1 OPT_FREQ.xyz

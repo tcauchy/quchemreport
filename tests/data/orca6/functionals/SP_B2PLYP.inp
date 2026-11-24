@@ -1,0 +1,12 @@
+! B2PLYP def2-SVP/C def2-SVP
+%pal nprocs 1 end
+%maxcore 2000
+%output
+ Print[ P_Basis ] 2
+ Print[ P_MOs ] 1
+end
+* xyz 0 1
+O 0.000 0.000 0.000
+H 0.000 0.757 0.587
+H 0.000 -0.757 0.587
+*

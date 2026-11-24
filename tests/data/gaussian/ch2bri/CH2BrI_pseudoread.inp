@@ -1,0 +1,22 @@
+%NProcShared=4
+#p PBE1PBE/Gen pseudo=read
+
+CH2BrI
+
+0 1
+C 0.000 0.000 0.000
+Br 0.000 1.650 0.950
+I 0.000 -1.780 1.100
+H 0.900 0.000 -0.600
+H -0.900 0.000 -0.600
+
+C H 0
+6-31G(d)
+****
+Br I 0
+LANL2DZ
+****
+
+Br I 0
+LANL2DZ
+

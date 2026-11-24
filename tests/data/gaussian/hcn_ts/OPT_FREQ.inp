@@ -1,0 +1,12 @@
+%Chk=OPT_FREQ
+%NProcShared=4
+%mem=2GB
+#p PBE1PBE/6-31G(d) pop=full gfprint opt=(ts,calcfc,noeigentest) freq
+
+OPT_FREQ
+
+0 1
+C 0.000 0.000 0.000
+N 1.180 0.000 0.000
+H 0.600 1.150 0.000
+

@@ -1,0 +1,7 @@
+He
+He_pol
+H2
+H2_pol
+Ne
+NH3_plan
+O2_ROHF

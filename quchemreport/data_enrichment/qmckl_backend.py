@@ -85,13 +85,22 @@ def cartesian_row(l, power):
     return _normalize_row(row, powers)
 
 
+_SPHERICAL_LABEL = re.compile(r"[DFGHI]\s*([+-]?\d+)$")
+
+
 def _parse_m(label, l):
     """Magnetic number from an AO label: Gaussian 'C1_3D+1', 'C1_10F 0', ORCA 'O1_1F-3'."""
-    name = label.split("_")[-1].upper()
-    found = re.search(r"[DFGHI]\s*([+-]?\d+)$", name)
+    found = _SPHERICAL_LABEL.search(label.split("_")[-1].upper())
     if found is None:
         raise ValueError(f"Cannot read the magnetic number of AO label {label!r}")
     return int(found.group(1))
+
+
+def is_spherical_label(label):
+    """True for a spherical AO label ('C1_3D+1', 'C1_3D 0', ORCA 'O1_1F-3'), False for a
+    Cartesian one ('C1_4XX', 'C1_6XXY'). Gaussian may mix both kinds in one basis set
+    (6-31G(2df): Cartesian d and spherical f; keywords 5D 10F: the reverse)."""
+    return _SPHERICAL_LABEL.search(label.split("_")[-1].upper()) is not None
 
 
 # ORCA's real spherical harmonics differ in sign from the standard (Gaussian) ones
@@ -163,7 +172,6 @@ class Wavefunction:
             for old, new in (("DZ2", "D 0"), ("DXZ", "D+1"), ("DYZ", "D-1"), ("DX2Y2", "D+2"), ("DXY", "D-2")):
                 labels = [lab.replace(old, new) for lab in labels]
         self.orca_signs = general.package == "orca" and orca_signs
-        spherical = any("+" in lab or "-" in lab for lab in labels)
 
         shell_l, shell_nucleus, prim_num, exps, coefs, prim_f, shell_f = [], [], [], [], [], [], []
         blocks = []          # (rows of T for this shell, number of Cartesian AOs)
@@ -181,7 +189,9 @@ class Wavefunction:
                 coefs += c
                 prim_f += list(pf)
                 shell_f.append(sf)
-                n_sph = 2 * l + 1 if (spherical and l > 1) else (l + 1) * (l + 2) // 2
+                # spherical or Cartesian is decided shell by shell (mixed basis sets)
+                spherical = l > 1 and position < len(labels) and is_spherical_label(labels[position])
+                n_sph = 2 * l + 1 if spherical else (l + 1) * (l + 2) // 2
                 rows = []
                 for label in labels[position:position + n_sph]:
                     if l == 0:

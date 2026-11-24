@@ -7,6 +7,7 @@ from quchemreport.utility_services.computed_data import ComputedData, config_log
 from quchemreport.visualization_engine import visu_mayavi, visu_plots, visu_txt
 from quchemreport.data_enrichment import calc_orb
 from quchemreport.utility_services.parameters import obk_step
+from quchemreport.utility_services.naming import state_label, state_number
 
 
 def generate_molecule_representation(
@@ -409,7 +410,7 @@ def output_es_EDD_OIF_DIP(computed_data: ComputedData):
                 atom_pairs,
                 atoms_Z,
                 et_sym[k],
-                file_name=output_dir+"img"+f"-log{log_idx + 1}", labels=[k+1]
+                file_name=output_dir+"img"+f"-log{log_idx + 1}", labels=[state_number(et_sym, k)]
             ) 
             
             if (len(et_rotats) > 0) and (abs(et_rotats[k]) > 10.):
@@ -423,7 +424,7 @@ def output_es_EDD_OIF_DIP(computed_data: ComputedData):
                     atom_pairs,
                     atoms_Z,
                     et_sym[k],
-                    file_name=output_dir+"img"+f"-log{log_idx + 1}", labels=[k+1]
+                    file_name=output_dir+"img"+f"-log{log_idx + 1}", labels=[state_number(et_sym, k)]
                 )            
 
             data_dip = all_data_dip[k]
@@ -436,7 +437,7 @@ def output_es_EDD_OIF_DIP(computed_data: ComputedData):
                     atoms_Z,
                     et_sym[k],
                     file_name=output_dir+"img"+f"-log{log_idx + 1}",
-                    labels=[k+1]
+                    labels=[state_number(et_sym, k)]
                 )
 
 
@@ -608,7 +609,7 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
             atom_pairs,
             atoms_Z,
             et_sym[emi_index], 
-            file_name=output_dir+f"img-log{log_idx}-emi", labels=[emi_state]
+            file_name=output_dir+f"img-log{log_idx}-emi", labels=[state_number(et_sym, emi_index)]
         ) 
         
         if (emi_rotat != 0.0):
@@ -621,7 +622,7 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
                     atoms_Z,
                     et_sym[emi_index],
                     file_name=output_dir+f"img-log{log_idx}-emi",
-                    labels=[emi_state]
+                    labels=[state_number(et_sym, emi_index)]
                 )
                 print(f"Generating transition dipole images for selected transition: {emi_state}")
 
@@ -631,10 +632,13 @@ def output_nto_images(computed_data: ComputedData, config: Config):
     if ref is None or config.output.verbosity == "text":
         return
     for log_idx, states in enumerate(computed_data.derived.excited_states.nto_pairs):
+        et_sym = computed_data.results.excited_states.et_sym[log_idx]
         for state in states or []:
+            # file img-log<i>-NTO-S<n>-pair<p> (T<n> for a triplet), as in the report
+            label = state_label(et_sym, state["state"] - 1) if et_sym else str(state["state"])
             for pair_idx, pair in enumerate(state["pairs"], 1):
                 prefix = (computed_data.metadata.output_dir +
-                          f"img-log{log_idx+1}-NTO-S{state['state']}-pair{pair_idx}")
+                          f"img-log{log_idx+1}-NTO-{label}-pair{pair_idx}")
                 print(f"Generating NTO images: log {log_idx+1}, state {state['state']}, pair {pair_idx}")
                 # Common grid, every k-th point (smooth images, like the MOs), evaluated directly
                 data, x, y, z = calc_orb.nto_pair(ref, pair["hole"], pair["electron"],

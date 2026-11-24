@@ -362,8 +362,11 @@ def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata
     try:
         try_update_value(data_model, "results.wavefunction.MO_number", data_json, ['properties', 'orbitals', 'MO number'], 
                             nullable=False) # not nullable in this context, exception catched.
-        # TODO: Pb with energies, if NaN -> -inf
-        data.moenergies[-1][np.isnan(data.moenergies[-1])] = -np.inf
+        # Energies too low for the printed format (Gaussian "**********", e.g. 1s of iodine in an
+        # all-electron basis set) are NaN in cclib and null in its JSON, which made the whole
+        # MO_energies list invalid (None): they become -inf, in every spin.
+        for moen in data.moenergies:
+            moen[np.isnan(moen)] = -np.inf
         w_cut = np.where(data.moenergies[-1] > 10.)
         b_cut = min(max(w_cut[0][0] if len(w_cut[0]) > 0 else 0,
                         data.homos.max() + 31),
@@ -371,7 +374,7 @@ def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata
         try_update_value(data_model, "results.wavefunction.MO_number_kept", int(b_cut))
 
         # prune energies and sym
-        try_update_value(data_model, "results.wavefunction.MO_energies", [moen[:b_cut] for moen in data_json['properties']['orbitals']['energies']])
+        try_update_value(data_model, "results.wavefunction.MO_energies", [[float(e) for e in moen[:b_cut]] for moen in data.moenergies])
         
         # Problem if there is no MO_sym like in ORCA !
         # TODO : Check if correct logique (if there is no MO_sys, while do we use a MO_Sym value to calculate it ?)

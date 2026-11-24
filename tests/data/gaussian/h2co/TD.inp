@@ -1,0 +1,10 @@
+%Chk=TD
+%NProcShared=4
+%mem=2GB
+#p PBE1PBE/6-31G(d) pop=full gfprint td=(nstates=5) geom=check guess=read
+
+TD
+
+0 1
+
+

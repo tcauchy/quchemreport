@@ -1,11 +1,10 @@
 """Regression tests for the corrections of the second code review (parser, quality checks,
 visualization, report), 19/11/2026.
 
-Small Gaussian/ORCA logs made for these tests: validation/revue2/logs (He, H2, ROHF O2,
-planar NH3 saddle point, ORCA optimization stopped at MaxIter).
+Small Gaussian/ORCA logs made for these tests: tests/data/gaussian/small (He, H2, ROHF O2,
+planar NH3 saddle point) and tests/data/orca6/maxiter (ORCA optimization stopped at MaxIter).
 
-Run: OMP_NUM_THREADS=4 PYTHONPATH=.:/applis/cclib/lib/python3.12/site-packages \
-     xvfb-run -a $ENV -m unittest tests.test_corrections_revue2
+Run (see tests/README.md): xvfb-run -a $ENV -m pytest tests/test_corrections_revue2.py
 """
 import contextlib
 import io
@@ -19,15 +18,6 @@ import yaml
 from scipy.spatial.transform import Rotation
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EX = os.path.join(ROOT, "examples")
-# small test logs: validation/revue2/logs of the test copy (validation/ is not installed in /applis)
-LOGS = next((d for d in (os.environ.get("QUCHEMREPORT_TEST_LOGS"),
-                         os.path.join(ROOT, "validation", "revue2", "logs"),
-                         "/home/mcadmin/quchemreport_qmckl_20261119/validation/revue2/logs")
-             if d and os.path.isdir(d)), None)
-if LOGS is None:
-    raise unittest.SkipTest("test logs of validation/revue2/logs not found (set QUCHEMREPORT_TEST_LOGS)")
-ORCA_TD = "/home/mcadmin/quchemreport_nto_20261117/validation_orca/TD.out"
 
 from quchemreport.config.config import Config
 from quchemreport.parser_engine.scanlog import (logfile_to_obj, split_logfile, nuclear_repulsion_energy,
@@ -38,6 +28,7 @@ from quchemreport.utility_services.naming import spin_letter
 from quchemreport.utility_services.computed_data import init_computed_data
 from quchemreport.visualization_engine.visu_mayavi import CalcCutOff
 from quchemreport.report_generator.generate_report import quality_warnings
+from tests.datafiles import geometry, log
 
 
 def read_steps(path, solver="gaussian"):
@@ -110,9 +101,7 @@ class ConformityExitTest(unittest.TestCase):
 
 class NuclearRepulsionTest(unittest.TestCase):
     def test_orientation_and_small_change(self):
-        model = read_steps(os.path.join(EX, "phenantren_OPT.log"))[0]
-        x = np.array(model.results.geometry.elements_3D_coords).reshape(-1, 3)
-        Z = np.array(model.molecule.atoms_Z)
+        Z, x = geometry("phenanthrene")
 
         def nre(coords):
             return nuclear_repulsion_energy(SimpleNamespace(natom=len(Z), atomnos=Z, atomcoords=np.array([coords])))
@@ -126,26 +115,26 @@ class NuclearRepulsionTest(unittest.TestCase):
         self.assertFalse(conformity.same_nre(ref, nre(z)))
 
     def test_same_geometry_needs_same_orientation(self):
-        a = read_steps(os.path.join(EX, "phenantren_OPT.log"))[0]
-        b = read_steps(os.path.join(EX, "phenantren_TD.log"))[0]      # same geometry (geom=allcheck)
-        es = read_steps(os.path.join(EX, "phenantren_OPT_ES1.log"))[0]
+        a = read_steps(log("gaussian/h2co/OPT.log"))[0]
+        b = read_steps(log("gaussian/h2co/TD.log"))[0]          # same geometry (geom=check)
+        es = read_steps(log("gaussian/h2co/OPT_ES1.log"))[0]
         self.assertTrue(conformity.same_geometry(a, b))
         self.assertFalse(conformity.same_geometry(a, es))
 
 
 class OpenShellTest(unittest.TestCase):
     def test_rohf_is_not_closed_shell(self):
-        rohf = read_steps(os.path.join(LOGS, "O2_ROHF.log"))[0]
+        rohf = read_steps(log("gaussian/small/O2_ROHF.log"))[0]
         self.assertEqual(str(rohf.comp_details.general.is_closed_shell), "False")
-        h2o = read_steps(os.path.join(EX, "H2O_OPT.log"))[0]
+        h2o = read_steps(log("gaussian/h2o/H2O_OPT.log"))[0]
         self.assertEqual(str(h2o.comp_details.general.is_closed_shell), "True")
 
 
 class MOLabelsTest(unittest.TestCase):
     def test_lumo_plus_one_beyond_the_last_mo(self):
         # He/6-31G: 2 MOs, lumo+1 does not exist (it passed the check and crashed in the grids)
-        he = read_steps(os.path.join(LOGS, "He.log"))[0]
-        config = config_for([(os.path.join(LOGS, "He.log"), "opt")])
+        he = read_steps(log("gaussian/small/He.log"))[0]
+        config = config_for([(log("gaussian/small/He.log"), "opt")])
         with contextlib.redirect_stdout(io.StringIO()):
             labels, indexes = compute.compute_MO_labels_and_indexes(he, config, "He.log")
         self.assertEqual(indexes, [[0, 1]])
@@ -160,34 +149,33 @@ class StructureWarningsTest(unittest.TestCase):
         return quality_warnings(computed)
 
     def test_imaginary_frequency(self):
-        warnings = self.warnings_for(read_steps(os.path.join(LOGS, "NH3_plan.log")))
+        warnings = self.warnings_for(read_steps(log("gaussian/small/NH3_plan.log")))
         self.assertEqual(len(warnings), 1)
         self.assertIn("889.8i", warnings[0])
 
     def test_minimum_has_no_warning(self):
-        self.assertEqual(self.warnings_for(read_steps(os.path.join(EX, "H2O_FREQ.log"))), [])
+        self.assertEqual(self.warnings_for(read_steps(log("gaussian/h2o/H2O_FREQ.log"))), [])
 
     def test_orca_optimization_not_converged(self):
-        models = read_steps(os.path.join(LOGS, "orca_maxiter", "H2O_maxiter.out"), "orca")
+        models = read_steps(log("orca6/maxiter/H2O_maxiter.out"), "orca")
         warnings = self.warnings_for(models)
         self.assertTrue(any("did not converge" in w for w in warnings))
 
 
 class OrcaFunctionalTest(unittest.TestCase):
     def test_functional_definition(self):
-        b3lyp = _orca_functional(os.path.join(LOGS, "orca_maxiter", "H2O_maxiter.out"), ["B3LYP", "def2-SVP", "Opt"])
+        b3lyp = _orca_functional(log("orca6/maxiter/H2O_maxiter.out"), ["B3LYP", "def2-SVP", "Opt"])
         self.assertEqual(b3lyp, "B3LYP (Exchange B88, Correlation LYP, HF exchange 0.2, DF-GGA-X 0.72, DF-GGA-C 0.81)")
-        self.assertIsNone(_orca_functional(os.path.join(EX, "H2O_OPT.log")))
+        self.assertIsNone(_orca_functional(log("gaussian/h2o/H2O_OPT.log")))
 
-    @unittest.skipUnless(os.path.isfile(ORCA_TD), "ORCA TD log of the NTO validation not found")
     def test_parsed_model(self):
-        model = read_steps(ORCA_TD, "orca")[0]
+        model = read_steps(log("orca5/h2o_td/TD.out"), "orca")[0]
         self.assertTrue(model.comp_details.general.functional.startswith("PBE0 (Exchange PBE, Correlation PBE"))
 
 
 class EmissionOrbitalsTest(unittest.TestCase):
     def test_opt_es_log_has_its_orbitals(self):
-        es = read_steps(os.path.join(EX, "phenantren_OPT_ES1.log"))[0]
+        es = read_steps(log("gaussian/h2co/OPT_ES1.log"))[0]
         self.assertTrue(compute._has_orbitals(es))
 
 

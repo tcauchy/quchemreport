@@ -381,6 +381,10 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
     if ref_data is None:
         print("Warning: MEP map skipped: no log file with MO coefficients for the reference.")
         return None
+    problem = calc_orb.electron_count_error(ref_data)
+    if problem:
+        print(f"Warning: MEP map skipped: {problem}.")
+        return None
     
     
     # We need to calculate the MEP map inside a child process because it may 
@@ -524,6 +528,11 @@ def compute_fukui_functions(computed_data: ComputedData, ref_data: LogData, log_
     if ref_data is None:
         print("Warning: Fukui functions skipped: no log file with MO coefficients for the reference.")
         return
+    for model in (ref_data, log_SP_plus, log_SP_minus):
+        problem = calc_orb.electron_count_error(model) if model is not None else None
+        if problem:
+            print(f"Warning: Fukui functions skipped ({model.metadata.log_file}): {problem}.")
+            return
     
     precomp_rho_opt = precomputed_rho_opt
     
@@ -820,6 +829,10 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
     grid_X = None
     grid_Y = None
     grid_Z = None
+    missing = [k + 1 for k, t in enumerate(et_transitions) if len(t) == 0]
+    if missing:
+        print(f"Warning: no excitation amplitudes in the log for the state(s) {missing}: "
+              "no EDD, Lambda, d_CT and q_CT for them.")
     try:
         TD_output, grid_X, grid_Y, grid_Z = calc_orb.TD(ref_data, et_transitions, grid_step=step, nproc=nproc, verbose=verbose)
     except MemoryError :
@@ -850,6 +863,8 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
         computed_data.derived.excited_states.all_data_dip[log_idx] = [None] * len(et_transitions)
         
         for k in selected_indices:
+            if TD_output is None or TD_output[k] is None:
+                continue
             
             if (len(et_rotats) > 0) and (abs(et_rotats[k]) > 10.):
                 #calculate only the elect and magnetic dipole for chiral compounds
@@ -988,8 +1003,10 @@ def compute_excited_states(computed_data: ComputedData, list_data_models: List[L
         if 'td' not in jobs:
             continue
 
+        orbitals = _td_orbitals(log, ref_data) if (do_nto or do_transitions_and_EDD) else ref_data
+
         if do_nto:
-            compute_nto_states(computed_data, log, ref_data, log_idx, config)
+            compute_nto_states(computed_data, log, orbitals, log_idx, config)
         
         if (do_abso or do_CD):
             print("\n-----------------------------------------------------------------")
@@ -1005,7 +1022,20 @@ def compute_excited_states(computed_data: ComputedData, list_data_models: List[L
             print(f" (Source : {log_file})")
             print("-----------------------------------------------------------------")
             
-            compute_es_transitions_and_EDD(computed_data, ref_data, config, log_idx, step, nproc)
+            compute_es_transitions_and_EDD(computed_data, orbitals, config, log_idx, step, nproc)
+
+
+def _td_orbitals(log: LogData, ref_data: LogData):
+    """Orbitals for the EDD and NTO of a TD log. Its excitation amplitudes refer to its own
+    orbitals (ORCA redoes the SCF: other phases and slightly other energies than the reference),
+    so they are used when the log has them at the geometry of the reference, orientation
+    included (the pictures are drawn with the atoms of the reference); otherwise the reference."""
+    from quchemreport.quality_check_engine.conformity import same_geometry
+    if (ref_data is not None and log is not ref_data and _has_orbitals(log)
+            and getattr(log.metadata, "discretizable", False) and same_geometry(ref_data, log)):
+        print(f"EDD and NTO from the orbitals of {log.metadata.log_file}.")
+        return log
+    return ref_data
 
 
 def compute_optimized_es_emi_and_CPL_spectrum(computed_data: ComputedData, log_idx, emi_state, do_emi, do_CPL):
@@ -1124,6 +1154,10 @@ def compute_optimized_es_transitions_and_EDD(computed_data: ComputedData, ref_da
     
     print(f"\nComputing Optimized Excited State transition for S{emi_state} done.")
     
+    if TD_output is not None and TD_output[0] is None:
+        print("Warning: no excitation amplitudes for the emitting state: no emission EDD.")
+        TD_output = None
+
     if TD_output is not None:
         # Using TD_output[0] instead of the index of the transition as TD_output only contain the transition of index emi_index here
         ct_dip = TD_output[0][2][3:]
