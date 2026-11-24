@@ -36,6 +36,7 @@ class GeneralCompDetails:
     package_version: List[Optional[str]]
     last_theory: List[Optional[str]]
     functional: List[Optional[str]]
+    dispersion: List[Optional[str]]
     basis_set_name: List[Optional[str]]
     basis_set_size: List[Optional[str]]
     is_closed_shell: List[Optional[bool]]

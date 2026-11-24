@@ -173,6 +173,7 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
         computed_data.comp_details.general.package_version[i] = log.comp_details.general.package_version
         computed_data.comp_details.general.last_theory[i] = log.comp_details.general.last_theory
         computed_data.comp_details.general.functional[i] = log.comp_details.general.functional
+        computed_data.comp_details.general.dispersion[i] = log.comp_details.general.dispersion
         computed_data.comp_details.general.basis_set_name[i] = log.comp_details.general.basis_set_name
         computed_data.comp_details.general.basis_set_size[i] = log.comp_details.general.basis_set_size
         computed_data.comp_details.general.is_closed_shell[i] = log.comp_details.general.is_closed_shell
@@ -928,7 +929,7 @@ def compute_nto_states(computed_data, log, ref_data, log_idx, config):
                       and ref_data.molecule.multiplicity == log.molecule.multiplicity
                       and ref_xyz.shape == td_xyz.shape and ref_xyz.size > 0
                       and np.allclose(ref_xyz, td_xyz, atol=1e-4, rtol=0))
-        for attr in ("functional", "basis_set_md5"):
+        for attr in ("functional", "dispersion", "basis_set_md5"):
             a, b = getattr(ref_data.comp_details.general, attr), getattr(log.comp_details.general, attr)
             if a and b and a != b:
                 compatible = False

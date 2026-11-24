@@ -5,6 +5,7 @@ Defects found on these calculations are marked xfail (strict) until they are fix
   2 mixed 6D/7F and 5D/10F basis sets          6 NTO skipped with ORCA (TD orbitals)
   3 TD without excitation amplitudes           7 state numbering per multiplicity
   4 TD without rotatory strengths              8 NTO names without the multiplicity
+  9 dispersion correction not compared (B3LYP and B3LYP-D3BJ accepted together)
 
 Run (see tests/README.md): tests/run_tests.sh all -k real_calculations
 """
@@ -140,6 +141,66 @@ def _warnings(models):
 ])
 def test_structure_warnings(path, solver, text):
     assert any(text in w for w in _warnings(read_steps(path, solver)))
+
+
+# ---------------------------------------------------------------- dispersion (defect 9)
+
+@pytest.mark.parametrize("path, solver, dispersion", [
+    ("gaussian/dispersion/B3LYP.log", "gaussian", None),
+    ("gaussian/dispersion/B3LYP_GD3.log", "gaussian", "d3zero"),
+    ("gaussian/dispersion/B3LYP_GD3BJ.log", "gaussian", "d3bj"),
+    ("gaussian/dispersion/wB97XD.log", "gaussian", "d2"),      # built into the functional
+    ("gaussian/dispersion/B97D3.log", "gaussian", "d3bj"),     # built into the functional
+    ("orca6/functionals/SP_PBE0.out", "orca", None),
+    ("orca6/functionals/SP_B3LYP_D3BJ.out", "orca", "d3bj"),
+    ("orca6/functionals/SP_B3LYP_D4.out", "orca", "d4"),
+    ("orca6/functionals/SP_wB97X_D3.out", "orca", "d3zero"),
+    ("orca6/functionals/SP_wB97X_V.out", "orca", "vv10"),
+])
+def test_dispersion_model(path, solver, dispersion):
+    """Defect 9: the dispersion correction comes from cclib (metadata["dispersion"], cclib#1973)."""
+    assert read_steps(path, solver)[0].comp_details.general.dispersion == dispersion
+
+
+def test_functional_label():
+    from quchemreport.utility_services.log_data import functional_label
+    assert functional_label("B3LYP") == "B3LYP"
+    assert functional_label("B3LYP", "d3bj") == "B3LYP + D3(BJ)"
+    assert functional_label("wB97XD", "d2") == "wB97XD + D2"
+    assert functional_label("B3LYP", "d5") == "B3LYP + d5"       # unknown model kept as is
+
+
+def _theory_check(paths, tmp_path):
+    """Output of the 'theory' conformity test on SP logs, and whether it stopped the run."""
+    import yaml
+    from quchemreport.config.config import Config
+    from quchemreport.parser_engine.scanlog import process_logfile_list
+    import quchemreport.quality_check_engine.conformity as conformity
+    from tests.helpers import report_config
+    cfg = report_config([{"path": p, "type": "sp", **({"reference": True} if i == 0 else {})}
+                         for i, p in enumerate(paths)])
+    config = Config(**yaml.safe_load(yaml.safe_dump(cfg)))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        _, models = process_logfile_list(config, log_storage_path=str(tmp_path))
+        try:
+            conformity.test_theory(conformity.extract_data_models(models))
+        except SystemExit:
+            return out.getvalue(), True
+    return out.getvalue(), False
+
+
+def test_theory_rejects_mixed_dispersion(tmp_path):
+    """Defect 9: cclib gives "B3LYP" with or without EmpiricalDispersion=GD3BJ."""
+    output, stopped = _theory_check(["gaussian/dispersion/B3LYP.log",
+                                     "gaussian/dispersion/B3LYP_GD3BJ.log"], tmp_path)
+    assert stopped and "B3LYP + D3(BJ)" in output
+
+
+def test_theory_accepts_same_dispersion(tmp_path):
+    output, stopped = _theory_check(["gaussian/dispersion/B3LYP_GD3BJ.log",
+                                     "gaussian/dispersion/B3LYP_GD3BJ.log"], tmp_path)
+    assert not stopped and "Test OK" in output
 
 
 # ------------------------------------------------------------------- full reports (slow)

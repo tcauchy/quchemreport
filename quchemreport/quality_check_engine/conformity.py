@@ -6,7 +6,7 @@ import numpy as np
 from typing import Any, List, Optional, Tuple
 
 from quchemreport.config.config import Config
-from quchemreport.utility_services.log_data import LogData
+from quchemreport.utility_services.log_data import LogData, functional_label
 from quchemreport.utility_services.validated_data import ValidatedData
 
 @dataclass
@@ -73,8 +73,11 @@ def extract_data_models(list_data_models: List[LogData], verbose=False):
         else :
             nres_noES.append(data_model.results.geometry.nuclear_repulsion_energy_from_xyz)
             
+        # The dispersion correction is part of the level of theory: B3LYP and B3LYP + D3(BJ)
+        # must not be mixed
         if data_model.comp_details.general.functional != None:
-            functionals.append(data_model.comp_details.general.functional)
+            functionals.append(functional_label(data_model.comp_details.general.functional,
+                                                data_model.comp_details.general.dispersion))
         else:
             functionals.append("ERROR reading functionals")
             

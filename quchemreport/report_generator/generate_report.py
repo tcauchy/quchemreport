@@ -10,6 +10,7 @@ from cclib.parser.utils import PeriodicTable
 
 from quchemreport.config.config import Config, OutputInclude
 from quchemreport.utility_services.computed_data import ComputedData, config_logfile
+from quchemreport.utility_services.log_data import functional_label
 from quchemreport.utility_services.parameters import THRESHOLD_IR_INTENSITIES
 from quchemreport.utility_services.units import nm_to_wnb, Eh_to_Kcal_mol
 from quchemreport.utility_services.naming import spin_letter, state_label, state_number
@@ -418,7 +419,9 @@ def fill_computational_details_section(doc, computed_data: ComputedData):
         # All variables below are a list where the index of the value match the index of each logfile
         package_version = computed_data.comp_details.general.package_version
         last_theory = computed_data.comp_details.general.last_theory
-        functional = computed_data.comp_details.general.functional
+        functional = [functional_label(f, d) if f is not None else None
+                      for f, d in zip(computed_data.comp_details.general.functional,
+                                      computed_data.comp_details.general.dispersion)]
         basis_set_name = computed_data.comp_details.general.basis_set_name
         basis_set_size = computed_data.comp_details.general.basis_set_size
         is_closed_shell = computed_data.comp_details.general.is_closed_shell

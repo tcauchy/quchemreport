@@ -1,0 +1,10 @@
+%NProcShared=4
+#p B3LYP/6-31G(d) EmpiricalDispersion=GD3
+
+H2O B3LYP_GD3
+
+0 1
+O 0.0 0.0 0.117
+H 0.0 0.757 -0.467
+H 0.0 -0.757 -0.467
+

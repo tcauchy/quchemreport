@@ -305,6 +305,7 @@ def general_param_subsection(data_model: LogData, data_json, data, obdata):
         
     try_update_value(data_model, "comp_details.general.list_theory", theo_array)
     try_update_value(data_model, "comp_details.general.functional", data.metadata, ['functional'])
+    try_update_value(data_model, "comp_details.general.dispersion", data.metadata, ['dispersion'])
     try_update_value(data_model, "comp_details.general.basis_set_name", data.metadata, ['basis_set'])
     
     # basis set Pickle version

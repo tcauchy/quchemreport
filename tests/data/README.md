@@ -9,7 +9,7 @@ path = log("gaussian/h2co/OPT.log")      # uncompressed copy in a temporary fold
 Z, xyz = geometry("phenanthrene")         # geometries/phenanthrene.xyz
 ```
 
-**Size budget: 2 MB for the whole folder** (1.6 MB in November 2026). Use the smallest
+**Size budget: 2 MB for the whole folder** (1.7 MB in November 2026). Use the smallest
 molecule and basis set that shows the behaviour to test, and avoid `pop=full` / MO printing on
 large systems.
 
@@ -26,6 +26,7 @@ large systems.
 | `gaussian/small` | Gaussian 09 D.01 | He, Ne, H2 (s functions only, single-sign orbitals), planar NH3 (saddle point), ROHF O2 triplet |
 | `gaussian/ch3i_mep` | Gaussian 09 D.01 | CH3I single points (nosymm) with LANL2DZ (ECP) and DGDZVP (all-electron iodine, 1s energy printed `**********`) |
 | `gaussian/ch3x_mep` | Gaussian 09 D.01 | CH3Cl and CH3Br single points (nosymm), PBE0/6-31G(d), all-electron halogens (MEP core correction) |
+| `gaussian/dispersion` | Gaussian 09 D.01 | H2O single points, 6-31G(d): B3LYP without dispersion, with GD3 and GD3BJ, and wB97XD / B97D3 (built-in D2 / D3(BJ)) |
 | `orca5/h2o_td` | ORCA 5.0.4 | H2O TD-DFT (frozen: ORCA 5 is no longer installed) |
 | `orca6/h2co` | ORCA 6.1 | formaldehyde, PBE0/def2-SVP: OPT+FREQ, TD, TD singlets+triplets, TD with SOC, SP+ / SP−, S1 and T1 optimisations |
 | `orca6/nh3_plan` | ORCA 6.1 | planar NH3, OPT+FREQ (one imaginary frequency) |

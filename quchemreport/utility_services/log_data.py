@@ -3,6 +3,18 @@ from typing import Any, Dict, List, Tuple, Union
 from pydantic import BaseModel
 import numpy as np
 
+DISPERSION_LABELS = {"d2": "D2", "d3zero": "D3(0)", "d3bj": "D3(BJ)", "d4": "D4", "vv10": "VV10"}
+
+
+def functional_label(functional, dispersion=None):
+    """Functional with its dispersion correction, e.g. "B3LYP + D3(BJ)": the level of theory
+    compared between log files and shown in the report. Built-in corrections are also shown
+    ("wB97XD + D2"), since cclib reads the model from what the program prints."""
+    if dispersion is None:
+        return functional
+    return f"{functional} + {DISPERSION_LABELS.get(dispersion, dispersion)}"
+
+
 class CustomModel(BaseModel):
     model_config = {
         "validate_assignment": True,
@@ -53,6 +65,8 @@ class CompDetailsGeneral(CustomModel):
     last_theory: str = None
     list_theory: List[str] = None
     functional: str = None
+    # Dispersion model from cclib (metadata["dispersion"]): d2, d3zero, d3bj, d4 or vv10
+    dispersion: str = None
     basis_set_name: str = None
     basis_set: str = None
     basis_set_md5: str = None
