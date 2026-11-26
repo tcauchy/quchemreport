@@ -1,17 +1,21 @@
 """Names of the excited-state images, shared by visualization_engine and report_generator."""
 
 
+# Letters of the multiplicities; the states of an open-shell reference are named after it by
+# scanlog._unrestricted_states (triplet O2: T1, T2...; a radical: D1, D2...)
+SPIN_LETTERS = {"Singlet": "S", "Doublet": "D", "Triplet": "T", "Quartet": "Q", "Quintet": "P"}
+
+
 def spin_letter(state_symmetry):
-    """'S' for a singlet state, 'T' for a triplet, '' otherwise (e.g. unrestricted
-    Gaussian states, labelled '3.002-?Sym' by cclib).
+    """'S' for a singlet state, 'T' for a triplet (D, Q, P for doublets, quartets, quintets),
+    '' otherwise (no multiplicity, e.g. '3.002-?Sym' as cclib reads unrestricted Gaussian states).
 
     state_symmetry is the symmetry string of ONE state (cclib etsyms element:
     'Singlet-A', 'Triplet-B2', 'Singlet' for ORCA...)."""
     sym = str(state_symmetry)
-    if "Singlet" in sym:
-        return "S"
-    if "Triplet" in sym:
-        return "T"
+    for name, letter in SPIN_LETTERS.items():
+        if name in sym:
+            return letter
     return ""
 
 

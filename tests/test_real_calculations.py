@@ -316,7 +316,8 @@ def test_triplet_nto_names():
     assert report.returncode == 0, report.output[-3000:]
     assert report.images("NTO-T1-pair1-MO-hole")
     assert not report.images("NTO-S")
-    assert "NTO T1" in report.tex
+    # grid label of the pair ("T1: 100.0%"), never "state 1"
+    assert re.search(r"T1: [0-9.]+\\%", report.tex) and "state 1" not in report.tex
 
 
 @pytest.mark.slow
@@ -498,3 +499,19 @@ def test_phosphorescence_from_optimized_triplet(tmp_path):
     assert 80 < phospho["k_r"] < 110 and 8e-3 < phospho["lifetime"] < 13e-3
     visu_plots.jablonski(computed.results.excited_states.soc[0], file_name=str(tmp_path / "img"))
     assert (tmp_path / "img-Jablonski.png").is_file()
+
+
+def test_edd_of_a_pure_beta_excitation():
+    """The emitting state of triplet O2 (ORCA, UKS) is a pure beta excitation: it formerly got no
+    EDD (calc_orb.TD only looked at the alpha orbitals) and an empty optimized-state table."""
+    from quchemreport.data_enrichment import calc_orb
+    model = read_steps("orca6/o2/OPT_ES1.out", "orca")[-1]
+    state = model.results.excited_states.et_transitions[0]
+    assert {sub[0][1] for sub in state} == {1} and {sub[1][1] for sub in state} == {1}
+    out, X, Y, Z = calc_orb.TD(model, [state], grid_step=0.3, nproc=2)
+    edd, tozer = out[0][0], out[0][1]
+    d3r = (X[1, 0, 0] - X[0, 0, 0]) * (Y[0, 1, 0] - Y[0, 0, 0]) * (Z[0, 0, 1] - Z[0, 0, 0])
+    assert abs(edd.sum() * d3r) < 0.02          # an electron moved, none created
+    # pi_u(beta) -> pi_g(beta) between orbitals on the same atoms: 0.16 e moved (grid 0.3 bohr)
+    assert 0.05 < edd[edd > 0].sum() * d3r < 1.0
+    assert 0 < tozer < 1

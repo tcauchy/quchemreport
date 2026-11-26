@@ -7,8 +7,8 @@ when the Config object is built (YAML_loader.load_yaml_config): a wrong value st
 before any log file is read, with a message naming the option.
 """
 
-from pydantic import BaseModel, Field, field_validator, model_validator, validator, root_validator
-from typing import List, Optional, Union, Dict
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, validator, root_validator
+from typing import List, Optional, Tuple, Union, Dict
 from pathlib import Path
 import warnings
 import os
@@ -256,9 +256,70 @@ class OutputInclude(BaseModel):
     # TODO : TO IMPLEMENT : NMR output is yet to be implemented
     # NMR: NMRInclude
 
+class SurfaceColors(BaseModel):
+    """Colours of the positive and negative parts of one kind of iso-surface (``output.colors.MO``,
+    ``EDD``, ``fukui`` or ``NTO``), each "#RRGGBB", a colour name ("teal", "lightpink": the CSS
+    names known to matplotlib) or [r, g, b] in 0-1; omitted: the default
+    (utility_services.parameters.DEFAULT_SURFACE_COLORS). The captions name the colours:
+    <sign>_name if given, else the word of the colour, else a name made from its value
+    (parameters.color_name). Unknown keys are refused, so that a misspelt "postive" does not
+    leave the default colour silently.
+    """
+    model_config = ConfigDict(extra="forbid")
+    positive: Optional[Tuple[float, float, float]] = None
+    negative: Optional[Tuple[float, float, float]] = None
+    positive_name: Optional[str] = None
+    negative_name: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def name_from_word(cls, values):
+        """A colour given by a word names itself in the captions ("xkcd:" or "tab:" removed)."""
+        if isinstance(values, dict):
+            values = dict(values)
+            for sign in ("positive", "negative"):
+                v = values.get(sign)
+                if isinstance(v, str) and not v.startswith("#") and not values.get(sign + "_name"):
+                    values[sign + "_name"] = v.split(":")[-1]
+        return values
+
+    @field_validator("positive", "negative", mode="before")
+    @classmethod
+    def parse_color(cls, v):
+        """(r, g, b) in 0-1 of "#RRGGBB", a colour name or [r, g, b]."""
+        if v is None:
+            return v
+        from matplotlib.colors import to_rgb
+        if isinstance(v, (list, tuple)) and (len(v) != 3 or not all(
+                isinstance(x, (int, float)) and not isinstance(x, bool) and 0 <= x <= 1 for x in v)):
+            raise ValueError(f"A colour list must be [r, g, b] with values in 0-1. Not {v} .")
+        try:
+            return tuple(float(x) for x in to_rgb(v))
+        except (ValueError, TypeError):
+            raise ValueError(f"Unknown colour '{v}': give \"#RRGGBB\", a colour name (e.g. teal) "
+                             "or [r, g, b] in 0-1.")
+
+
+class Colors(BaseModel):
+    """``output.colors`` section: colours of the iso-surfaces of the 3D pictures (see
+    SurfaceColors and docs/configuration.md)."""
+    model_config = ConfigDict(extra="forbid")
+    MO: SurfaceColors = Field(default_factory=SurfaceColors)
+    EDD: SurfaceColors = Field(default_factory=SurfaceColors)
+    fukui: SurfaceColors = Field(default_factory=SurfaceColors)
+    NTO: SurfaceColors = Field(default_factory=SurfaceColors)
+
+    def as_dict(self):
+        """kind -> sign -> ((r, g, b) or None, name or None), for parameters.set_surface_colors."""
+        return {kind: {sign: (getattr(c, sign), getattr(c, sign + "_name"))
+                       for sign in ("positive", "negative")}
+                for kind, c in ((k, getattr(self, k)) for k in ("MO", "EDD", "fukui", "NTO"))}
+
+
 class Output(BaseModel):
     """``output`` section: output folder and molecule name, format and verbosity of the report
-    (full, si or text), size of the 3D pictures and grid reduction used to draw them.
+    (full, si or text), size of the 3D pictures and grid reduction used to draw them, spectra,
+    camera views and colours of the iso-surfaces.
     """
     output_path: str
     molecule_designated_name: str
@@ -274,6 +335,65 @@ class Output(BaseModel):
     image_grid_reduction: int = Field(default=2, ge=1, le=10)
     # Sensitive surfaces (density differences): EDD, Oif, Fukui, Fdual.
     image_grid_reduction_sensitive: int = Field(default=1, ge=1, le=10)
+    # Main axis of the UV-visible, CD, emission and phosphorescence spectra: wavenumber
+    # (cm-1, linear in energy) or wavelength (nm, as most experimental spectra); the other
+    # unit is on the top axis.
+    spectrum_axis: str = "wavenumber"
+    # Range of the spectra on the main axis, in its unit (cm-1 for wavenumber, nm for
+    # wavelength), e.g. [200, 600]; omitted: every computed band with 3 FWHM on each side.
+    spectrum_range: Optional[List[float]] = None
+
+    @field_validator("spectrum_range")
+    def validate_spectrum_range(cls, v):
+        """Two different positive numbers (any order)."""
+        if v is None:
+            return v
+        if len(v) != 2 or min(v) <= 0 or v[0] == v[1]:
+            raise ValueError(f"Output spectrum_range must be two different positive numbers. Not {v} .")
+        return sorted(v)
+
+    # Views of the 3D pictures: auto (a second view only when one is not enough, see
+    # visualization_engine.camera), 1 (never a second view) or 2 (always, except for linear
+    # molecules).
+    camera_views: Union[int, str] = "auto"
+    # Colours of the iso-surfaces (MO, EDD, Fukui, NTO), see Colors; omitted: the defaults
+    colors: Colors = Field(default_factory=Colors)
+    # Intensity of the specular reflections (white highlights) of the atoms, bonds and
+    # iso-surfaces, 0-1; 0 = diffuse light only (the pictures before November 2026). Not on
+    # the MEP surface. See visu_mayavi.SPECULAR.
+    specular: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Renderer of the 3D pictures: vtk (Mayavi, default) or povray (ray-traced: anti-aliased
+    # edges, soft shadows, ambient occlusion; about 4 s more per picture with 16 threads), see
+    # visualization_engine/povray.py. povray_executable: path of POV-Ray when it is not in the
+    # PATH nor in the conda environment. Without POV-Ray the pictures are rendered by VTK.
+    renderer: str = "vtk"
+    povray_executable: Optional[str] = None
+
+    @field_validator("renderer")
+    def validate_renderer(cls, v: str) -> str:
+        """Accept vtk or povray."""
+        v_lower = v.lower()
+        if v_lower not in {"vtk", "povray"}:
+            raise ValueError(f"Output renderer must be vtk or povray. Not '{v}' .")
+        return v_lower
+
+    @field_validator("camera_views", mode="before")
+    def validate_camera_views(cls, v):
+        """Accept auto, 1 or 2."""
+        value = v.lower() if isinstance(v, str) else v
+        if value in ("1", "2"):
+            value = int(value)
+        if isinstance(value, bool) or value not in ("auto", 1, 2):
+            raise ValueError(f"Output camera_views must be auto, 1 or 2. Not '{v}' .")
+        return value
+
+    @field_validator("spectrum_axis")
+    def validate_spectrum_axis(cls, v: str) -> str:
+        """Accept wavenumber or wavelength."""
+        v_lower = v.lower()
+        if v_lower not in {"wavenumber", "wavelength"}:
+            raise ValueError(f"Output spectrum_axis must be wavenumber or wavelength. Not '{v_lower}' .")
+        return v_lower
 
     @field_validator("format")
     def validate_format(cls, v: str) -> str:
@@ -292,37 +412,6 @@ class Output(BaseModel):
         if v_lower not in allowed:
             raise ValueError(f"Output verbosity must be one of {allowed}. Not '{v_lower}' .")
         return v_lower
-
-
-class CameraView(BaseModel):
-    """Manual control of the camera views (``camera_view``). Not used: Config does not read
-    this section, and the views are chosen from the geometry (visualization_engine.camera).
-    Kept for a future override of the automatic views.
-    """
-    mode: str = "auto"  # auto | preset | manual
-    preset: Optional[str] = None  # x, y, z
-    view_file: Optional[Path] = None
-
-    @field_validator("mode")
-    def mode_must_be_valid(cls, v: str) -> str:
-        """Accept auto, preset or manual."""
-        allowed = {"auto", "preset", "manual"}
-        v_lower = v.lower()
-        if v_lower not in allowed:
-            raise ValueError(f"Camera view mode must be one of: {allowed}. Not '{v_lower}' .")
-        return v_lower
-
-    @model_validator(mode="after")
-    def check_mode_dependencies(self) -> "CameraView":
-        """Require the preset axis or the view file of the chosen mode."""
-        if self.mode == "preset":
-            allowed_preset = {"x", "y", "z"}
-            if self.preset not in allowed_preset:
-                raise ValueError(f"When mode is 'preset', 'preset' must be one of: {allowed_preset}. Not '{self.preset}' .")
-        elif self.mode == "manual":
-            if self.view_file is None:
-                raise ValueError(f"When mode is 'manual', 'view_file' must be provided. Not '{self.view_file}' .")
-        return self
 
 
 class LoggingSettings(BaseModel):
@@ -359,7 +448,6 @@ class Config(BaseModel):
     output: Output
     logging: LoggingSettings
     resources: Resources = Field(default_factory=Resources)
-    # camera_view: CameraView
 
     @field_validator("common_solver", mode="before")
     def normalize_and_validate_solver(cls, v: str) -> str:

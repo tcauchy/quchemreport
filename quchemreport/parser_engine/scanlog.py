@@ -12,6 +12,7 @@ electronic and thermal energies, and the functional of ORCA calculations.
 """
 
 import os
+import re
 import sys
 import traceback
 import json
@@ -457,9 +458,12 @@ def freq_param_subsection(data_model: LogData, data_json, data, obdata):
 
 def td_param_subsection(data_model: LogData, data_json, data, obdata):
     """Fill ``comp_details.excited_states`` (number of excited states)."""
-    et_states = data_json.get('transitions', {}).get('electronic transitions', None)
-    if et_states:
-        data_model.comp_details.excited_states.nb_et_states = len(et_states)
+    # Number of states from the cclib attribute etenergies: the JSON entry used before
+    # ('transitions' / 'electronic transitions') gave 3 instead of 20 states for an ORCA TD
+    # with triplets and SOC, and 1 instead of 10 for an ORCA excited-state optimization.
+    etenergies = getattr(data, "etenergies", None)
+    if etenergies is not None and len(etenergies):
+        data_model.comp_details.excited_states.nb_et_states = len(etenergies)
     ## TODO:
     # data_model.comp_details.excited_states.TDA = 'N/A' # TODO: test Tamm Damcoff approx.
     # data_model.comp_details.excited_states.et_sym_constraints = 'N/A/'
@@ -877,7 +881,44 @@ def logfile_to_obj(logfile, verbose=False):
     # Spin-orbit coupling: not read by cclib (see parser_engine.orca_soc)
     if general.package == "orca":
         data_model.results.excited_states.soc = read_orca_soc(logfile)
+    _unrestricted_states(logfile, data_model)
     return data_model
+
+
+# Name of the multiplicity in the state symmetries (as cclib writes 'Singlet-A', 'Triplet-B2')
+MULTIPLICITY_NAMES = {1: "Singlet", 2: "Doublet", 3: "Triplet", 4: "Quartet", 5: "Quintet"}
+_S2_GAUSSIAN = re.compile(r"^ Excited State\s+\d+:.*<S\*\*2>=\s*(-?\d+\.\d+)")
+_S2_ORCA = re.compile(r"^STATE\s+\d+:\s+E=.*<S\*\*2>\s*=\s*(-?\d+\.\d+)")
+
+
+def _unrestricted_states(logfile, data_model):
+    """Multiplicity names and <S^2> of the excited states of an open-shell reference.
+
+    cclib gives no multiplicity for these states ('3.002-?Sym' for Gaussian, the multiplicity
+    estimated from <S^2>; '???' for ORCA), so they had no S/T label and their spin
+    contamination did not appear in the report (O2, 26/11/2026). A TD-DFT from an open-shell
+    reference only gives excitations that keep the spin projection: the states are named after
+    the multiplicity of the reference (triplet O2: T1, T2...), and <S^2>, read in the log
+    (the last values: an optimization prints one TD per step), shows how far each one is from
+    a pure spin state."""
+    es = data_model.results.excited_states
+    mult = data_model.molecule.multiplicity
+    if not es.et_sym or not mult or mult == 1 or any("Singlet" in str(x) or "Triplet" in str(x) for x in es.et_sym):
+        return
+    name = MULTIPLICITY_NAMES.get(mult)
+    if name is None:
+        return
+    spatial = [str(x).split("-", 1)[1] if "-" in str(x) else "" for x in es.et_sym]
+    es.et_sym = [f"{name}-{sym}" if sym and sym not in ("?Sym", "???") else name for sym in spatial]
+    pattern = _S2_ORCA if data_model.comp_details.general.package == "orca" else _S2_GAUSSIAN
+    try:
+        with open(logfile, errors="replace") as fd:
+            values = [float(m.group(1)) for m in map(pattern.match, fd) if m]
+    except OSError:
+        return
+    n = len(es.et_sym)
+    if len(values) >= n:
+        es.et_s2 = values[-n:]
 
 
 def quality_check_lvl2(data_model: LogData, solver, verbose=False):
@@ -979,6 +1020,10 @@ def process_logfile(config: Config, logfile, logfile_idx, log_storage_path="", v
                 f"{type(err).__name__}: {err}. Check this log file (or remove it from the YAML file)."
             ) from err
         data_model.metadata.config_idx = logfile_idx
+        # Name shown in the report and messages: the file given in the YAML file, not the
+        # temporary step file (OPT_step_0.log), with the step for multi-step logs
+        data_model.metadata.log_file = os.path.basename(logfile) + (
+            f" (step {step + 1})" if len(log_files) > 1 else "")
         data_model.comp_details.general.job_type = config.logfiles[logfile_idx].type   
         # job_type_guess(res_json) # jobtype logique replaced and metadata.discretizable moved over to metadata section
         quality_check_lvl2(data_model, solver, verbose=verbose)
@@ -1013,5 +1058,13 @@ def process_logfile_list(config: Config, log_storage_path="", verbose=False):
         )
         log_files += l
         data_list += d
+
+    # Two YAML entries with the same file name (OPT.log of two folders): add the folder
+    names = [os.path.basename(f) for f in logfilelist]
+    for model in data_list:
+        logfile = logfilelist[model.metadata.config_idx]
+        if names.count(os.path.basename(logfile)) > 1:
+            model.metadata.log_file = os.path.join(os.path.basename(os.path.dirname(logfile)),
+                                                   model.metadata.log_file)
 
     return (log_files, data_list)

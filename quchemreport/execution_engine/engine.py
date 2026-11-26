@@ -40,6 +40,20 @@ def run(config: Config):
     visu_mayavi.set_image_size(config.output.image_size)
     visu_mayavi.set_image_grid_reduction(config.output.image_grid_reduction,
                                          config.output.image_grid_reduction_sensitive)
+    visu_mayavi.set_camera_views(config.output.camera_views)
+    visu_mayavi.set_specular(config.output.specular)
+    visu_mayavi.set_renderer(config.output.renderer, config.output.povray_executable,
+                             config.resources.nproc or 20)
+    # colours of the iso-surfaces, read by visu_mayavi and by the captions of generate_report
+    from quchemreport.utility_services import parameters
+    parameters.set_surface_colors(config.output.colors.as_dict())
+    from quchemreport.visualization_engine import visu_plots
+    visu_plots.set_spectrum_axis(config.output.spectrum_axis)
+    from quchemreport.data_enrichment import TD2UVvis
+    rng = config.output.spectrum_range
+    if rng is not None and config.output.spectrum_axis == "wavelength":
+        rng = [1.0e7 / x for x in rng]          # nm -> cm-1
+    TD2UVvis.set_user_range(rng)
     nto = config.output.include.excited_states.natural_transition_orbitals
     if nto.grid_step is not None or nto.nproc is not None:
         print("Note: natural_transition_orbitals.grid_step / nproc are ignored; the NTO images use "

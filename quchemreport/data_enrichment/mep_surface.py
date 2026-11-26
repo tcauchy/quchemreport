@@ -24,6 +24,25 @@ import numpy as np
 MEP_SURFACE_ISOVALUE = 0.001
 # Two extrema of the same kind are at least this far apart (bohr)
 EXTREMA_RADIUS = 1.0
+# Prominence of an extremum: how much it stands out from its surroundings, |V_ext - median of V
+# on the surface points PROMINENCE_SHELL (bohr) away from it|. Extrema less prominent than
+# PROMINENCE_MIN (hartree/e; 0.5 kcal/mol) are not reported.
+# Why (statistical study of 26/11/2026, validation/calculs_20261123/mep_extrema_stats: all the
+# extrema, without threshold, of 146 calculations of the laboratory, 4661 extrema):
+# - a threshold on |V| (2 kcal/mol, tried first) has no statistical basis: the distribution of
+#   |V| has one peak (about 15 kcal/mol) and a continuous tail towards zero, with no valley nor
+#   stable inflection; the 4 % of extrema below 2 kcal/mol stand out as much as the others
+#   (median prominence 2.6 kcal/mol) and include sigma-holes (Cl: +2.1 kcal/mol);
+# - the prominence has one peak (3.5-4 kcal/mol for neutral molecules, 5 for ions) and a
+#   separate tail below 0.5 kcal/mol (0.6 % of the extrema): "maxima" above carbon atoms in the
+#   negative pi regions of helicenes (V = -11 to -21 kcal/mol), some not even above their
+#   surroundings, i.e. artefacts of the mesh;
+# - O2 keeps its weak but real extrema (rings at -1.4 and +5.6 kcal/mol, +0.17 kcal/mol at the
+#   ends of the axis, prominences 1.0 to 4.0).
+# The radius of the shell is a choice: a topological prominence (depth of the saddle towards a
+# stronger extremum) would need none.
+PROMINENCE_SHELL = (1.5, 2.5)
+PROMINENCE_MIN = 0.5 / 627.509
 # Half-width (hartree/e) of the fixed, symmetric colour scale of the MEP pictures, by charge of
 # the molecule (decision of Thomas Cauchy, 24/11/2026). No standard range exists: the usual
 # practice is a symmetric scale around zero, the same for a series of compounds, given with a
@@ -116,11 +135,30 @@ def local_extrema(points, triangles, values, radius=EXTREMA_RADIUS):
     return found
 
 
+def prominences(points, values, extrema, shell=PROMINENCE_SHELL):
+    """Prominence of each (kind, vertex) of extrema: V_ext - median of V on the points at a
+    distance within shell (bohr), with the sign that makes it positive when the extremum stands
+    out (a minimum below its surroundings); None when no point lies in the shell."""
+    from scipy.spatial import cKDTree
+    tree = cKDTree(points)
+    out = []
+    for kind, i in extrema:
+        near = np.asarray(tree.query_ball_point(points[i], shell[1]), dtype=int)
+        ring = near[np.linalg.norm(points[near] - points[i], axis=1) >= shell[0]] if len(near) else near
+        if len(ring) == 0:
+            out.append(None)
+            continue
+        sign = -1.0 if kind == "min" else 1.0
+        out.append(float(sign * (values[i] - np.median(values[ring]))))
+    return out
+
+
 def mep_surface_extrema(rho, MEP, X, Y, Z, coords, isovalue=MEP_SURFACE_ISOVALUE,
                         radius=EXTREMA_RADIUS):
     """Local extrema of the MEP on the density isosurface.
 
     rho, MEP, X, Y, Z: grids of calc_orb.Potential (bohr, hartree/e); coords: nuclei (n, 3, bohr).
+    Extrema less prominent than PROMINENCE_MIN (see prominences) are left out.
     Returns a list of dicts, minima from the most negative then maxima from the most positive:
     kind ("min"/"max"), value (hartree/e), position (bohr), atom (index of the nearest nucleus),
     distance (to that nucleus, bohr) and direction (unit vector from that nucleus, to place
@@ -134,13 +172,61 @@ def mep_surface_extrema(rho, MEP, X, Y, Z, coords, isovalue=MEP_SURFACE_ISOVALUE
                                      bounds_error=False, fill_value=None)(points)
     coords = np.asarray(coords, dtype=float).reshape(-1, 3)
     extrema = []
-    for kind, i in local_extrema(points, triangles, values, radius):
+    found = local_extrema(points, triangles, values, radius)
+    prominence = prominences(points, values, found)
+    for (kind, i), prom in zip(found, prominence):
         offsets = points[i] - coords
         distances = np.linalg.norm(offsets, axis=1)
         atom = int(np.argmin(distances))
         extrema.append({"kind": kind, "value": float(values[i]), "position": points[i].tolist(),
                         "atom": atom, "distance": float(distances[atom]),
-                        "direction": (offsets[atom] / distances[atom]).tolist()})
+                        "direction": (offsets[atom] / distances[atom]).tolist(), "prominence": prom})
+    extrema = [e for e in extrema if e["prominence"] is None or e["prominence"] >= PROMINENCE_MIN]
     minima = sorted((e for e in extrema if e["kind"] == "min"), key=lambda e: e["value"])
     maxima = sorted((e for e in extrema if e["kind"] == "max"), key=lambda e: -e["value"])
     return minima + maxima
+
+
+def merge_rings(extrema, coords, up, tol=1.0e-4):
+    """Extrema of a linear molecule: one entry per ring around the axis.
+
+    The MEP of a linear molecule has cylindrical symmetry: an extremum off the axis is a whole
+    ring (the positive belt of O2), of which the mesh keeps one or more arbitrary points (two
+    for O2, both on the hidden side, 26/11/2026). Points of the same kind, value (within tol,
+    hartree/e), axial position and radius (0.3 bohr) are merged into one entry with
+    ring = True, put on the side of up (the vertical of the picture: the marker stands out at
+    the edge of the surface instead of hiding behind it). Other molecules: extrema unchanged.
+
+    extrema: mep_surface_extrema; coords: nuclei (n, 3, bohr); up: unit vector."""
+    coords = np.asarray(coords, dtype=float).reshape(-1, 3)
+    if len(coords) < 2 or not extrema:
+        return extrema
+    origin = coords[0]
+    axis = coords[np.argmax(np.linalg.norm(coords - origin, axis=1))] - origin
+    axis /= np.linalg.norm(axis)
+    off = coords - origin - np.outer((coords - origin) @ axis, axis)
+    if np.max(np.linalg.norm(off, axis=1)) > 1.0e-3:
+        return extrema
+    side = np.asarray(up, dtype=float) - (np.asarray(up, dtype=float) @ axis) * axis
+    side /= np.linalg.norm(side)
+    merged = []
+    for e in extrema:
+        p = np.asarray(e["position"], dtype=float)
+        t = (p - origin) @ axis
+        radius = np.linalg.norm(p - origin - t * axis)
+        if radius < 0.3:
+            merged.append(e)
+            continue
+        if any(m.get("ring") and m["kind"] == e["kind"] and abs(m["value"] - e["value"]) < tol
+               and abs(m["_t"] - t) < 0.3 and abs(m["_r"] - radius) < 0.3 for m in merged):
+            continue
+        q = origin + t * axis + radius * side
+        offsets = q - coords
+        distances = np.linalg.norm(offsets, axis=1)
+        atom = int(np.argmin(distances))
+        merged.append(dict(e, position=q.tolist(), atom=atom, distance=float(distances[atom]),
+                           direction=(offsets[atom] / distances[atom]).tolist(), ring=True, _t=t, _r=radius))
+    for m in merged:
+        m.pop("_t", None)
+        m.pop("_r", None)
+    return merged

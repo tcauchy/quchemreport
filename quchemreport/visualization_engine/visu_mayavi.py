@@ -31,7 +31,8 @@ from quchemreport.data_enrichment import mep_surface
 from quchemreport.utility_services.naming import spin_letter
 
 ## Import mayavi defaults parameters
-from quchemreport.utility_services.parameters import img_width, img_height, surf_opacity, colors, scale
+from quchemreport.visualization_engine import povray
+from quchemreport.utility_services.parameters import img_width, img_height, surf_opacity, colors, scale, surface_colors
 from quchemreport.visualization_engine import camera
 width = img_width
 height = img_height
@@ -43,9 +44,65 @@ def set_image_size(pixels):
     width = height = int(pixels)
 
 
+# Specular reflections of the atoms, bonds and iso-surfaces (output.specular, set_specular):
+# intensity 0-1 of white highlights, Phong interpolation, exponent SPECULAR_POWER. Why (Thomas,
+# 26/11/2026): a POV-Ray-like glossy look; with diffuse light only, the dark surfaces (Tyrian
+# purple) looked flat and nearly black. Tested on the acetone HOMO under Xvfb/llvmpipe: about
+# the same rendering time; the VTK ambient occlusion (vtkSSAOPass) cut the lobes and drew
+# stray lines, the shadow maps (vtkShadowMapPass) gave striped and black faces: not used.
+# 0 keeps the former pictures pixel for pixel (the properties are then left untouched).
+# The MEP surface is not made glossy: a highlight would hide its colour scale.
+SPECULAR = 0.0
+SPECULAR_POWER = 40
+
+
+def set_specular(intensity):
+    """Intensity 0-1 of the specular reflections (config output.specular)."""
+    global SPECULAR
+    SPECULAR = min(1.0, max(0.0, float(intensity)))
+
+
+def _shine(module):
+    """Specular reflections (SPECULAR) on the actor of a Mayavi module or glyph."""
+    if SPECULAR > 0:
+        prop = module.actor.property
+        prop.interpolation = "phong"
+        prop.specular = SPECULAR
+        prop.specular_power = SPECULAR_POWER
+        prop.specular_color = (1.0, 1.0, 1.0)
+    return module
+
+
 def _size(size):
     """Size (width, height) in pixels of a saved picture: the given one, or the default."""
     return size if size is not None else (width, height)
+
+
+def set_renderer(renderer="vtk", executable=None, threads=4):
+    """Renderer of the 3D pictures (config output.renderer): "vtk", or "povray" (the VTK
+    picture is then replaced by its POV-Ray rendering, see povray.py). Returns the renderer
+    used: "vtk" with a warning when POV-Ray is asked for but not found."""
+    if renderer != "povray":
+        povray.configure(None)
+        return "vtk"
+    found = povray.find_executable(executable)
+    if found is None:
+        print("Warning: output.renderer is povray but no POV-Ray executable was found "
+              f"({executable or 'povray in the PATH or the conda environment'}); the pictures are rendered by VTK.")
+        povray.configure(None)
+        return "vtk"
+    povray.configure(found, threads)
+    return "povray"
+
+
+def _savefig(figure, name, size=None, alpha=False, shadows=True):
+    """Saves the figure as name with VTK, then, when output.renderer is povray, replaces it by
+    the POV-Ray rendering of the same scene and camera (same framing to the pixel, so that the
+    labels projected with the VTK camera stay in place). The VTK picture is always made first:
+    the render sets the lights exported to POV-Ray, and it stays if POV-Ray fails.
+    Returns True when the picture is the POV-Ray one (alpha: transparent background)."""
+    mlab.savefig(name, figure=figure, size=_size(size))
+    return povray.save(figure, name, _size(size), alpha=alpha, shadows=shadows)
 
 
 ## Images are drawn on every k-th point of the computation grid (config
@@ -163,8 +220,8 @@ def _init_scene(elements_3D_coords, atom_pairs, atoms_Z):
     ## Requires >=MayaVi-4.6.0
     for z in dict.fromkeys(atom_nums.tolist()):
         p = geom[atom_nums == z]
-        mlab.points3d(p[:, 0], p[:, 1], p[:, 2],
-                      figure=figure, mode='sphere', color=color_of(z), resolution=15, scale_factor=0.5)
+        _shine(mlab.points3d(p[:, 0], p[:, 1], p[:, 2],
+                             figure=figure, mode='sphere', color=color_of(z), resolution=15, scale_factor=0.5))
     ## Each bond (i, j) and (j, i) is a half tube from atom i to the middle of the bond, coloured
     ## like atom i. Tubes have the same radius for all bonds (cylinder glyphs scaled with the bond
     ## length made the long bonds, e.g. C-I, thicker than the atoms).
@@ -180,21 +237,34 @@ def _init_scene(elements_3D_coords, atom_pairs, atoms_Z):
         src.mlab_source.dataset.lines = np.column_stack([np.arange(n), np.arange(n) + n])
         src.update()
         tube = mlab.pipeline.tube(src, tube_radius=BOND_RADIUS, tube_sides=15)
-        mlab.pipeline.surface(tube, color=color, figure=figure)
+        _shine(mlab.pipeline.surface(tube, color=color, figure=figure))
 
     return figure
 
+# Number of views of the 3D pictures: "auto" (camera.choose_views decides), 1 or 2
+# (output.camera_views, set_camera_views)
+CAMERA_VIEWS = "auto"
+
+
+def set_camera_views(n_views):
+    """Number of views of the 3D pictures: "auto", 1 or 2 (camera.choose_views)."""
+    global CAMERA_VIEWS
+    if n_views not in ("auto", 1, 2):
+        raise ValueError(f"camera views must be 'auto', 1 or 2, not {n_views!r}")
+    CAMERA_VIEWS = n_views
+
+
 @functools.lru_cache(maxsize=16)
-def _cached_views(coords, atoms_Z, atom_pairs):
+def _cached_views(coords, atoms_Z, atom_pairs, n_views):
     """camera.choose_views on hashable arguments, cached (views_of)."""
-    return camera.choose_views(np.array(coords), atoms_Z, atom_pairs)
+    return camera.choose_views(np.array(coords), atoms_Z, atom_pairs, n_views)
 
 
 def views_of(elements_3D_coords, atom_pairs, atoms_Z):
     """Camera views of the molecule (visualization_engine.camera), computed once per geometry."""
     coords = tuple(np.round(np.asarray(elements_3D_coords, dtype=float).ravel(), 6))
     pairs = tuple(tuple(int(k) for k in p) for p in atom_pairs) if atom_pairs is not None else None
-    return _cached_views(coords, tuple(int(z) for z in atoms_Z), pairs)
+    return _cached_views(coords, tuple(int(z) for z in atoms_Z), pairs, CAMERA_VIEWS)
 
 
 # Margin around the drawn objects in the pictures (1 = touching the border). 1.08 left the
@@ -259,13 +329,127 @@ def fit_camera(figure, view, margin=FRAME_MARGIN):
     return figure
 
 
+# Labels written on the saved pictures (atom numbers, MEP extrema), in 2D.
+# Why (26/11/2026): the former 3D labels (mlab.text3d) had a size that changed with the depth,
+# were cut at the border (O2: "O2" half out of the picture, their bounds being taken before they
+# turn to the camera), were hidden by the MEP surface or drawn over the atoms. They are now
+# written on the picture at the projection of their point, with a fixed size and a white halo,
+# on the free side among 8 positions around the point, inside the picture.
+LABEL_FONT = 0.032          # height of the labels, fraction of the picture width
+LABEL_HALO = 0.15           # width of the white halo, fraction of the label height
+
+
+def project(points, camera, width, height):
+    """Pixel coordinates (x right, y down) of points (n, 3) seen by the VTK camera, and their
+    distance in front of it (perspective projection, view_angle = vertical angle)."""
+    pos = np.asarray(camera.position, dtype=float)
+    f = np.asarray(camera.focal_point, dtype=float) - pos
+    f /= np.linalg.norm(f)
+    up = np.asarray(camera.view_up, dtype=float)
+    r = np.cross(f, up)
+    r /= np.linalg.norm(r)
+    u = np.cross(r, f)
+    v = np.asarray(points, dtype=float).reshape(-1, 3) - pos
+    z = v @ f
+    t = np.tan(np.radians(camera.view_angle) / 2)
+    x_ndc = (v @ r) / (z * t) * height / width
+    y_ndc = (v @ u) / (z * t)
+    return np.column_stack([(x_ndc + 1) / 2 * width, (1 - y_ndc) / 2 * height]), z
+
+
+def write_labels(png, labels, avoid=()):
+    """Write labels on the picture png: [(x, y, text, (dx, dy), r)], (x, y) the pixel of the
+    point, (dx, dy) the preferred side (y up), r the radius (pixels) of the drawn point, which
+    the label must clear. avoid: [(x, y, radius)] discs (pixels) the labels should not cover
+    (atoms, bonds, markers). Each label takes the free place nearest to its point, preferring
+    its side; overlapping another label costs more than covering a bond."""
+    if not labels:
+        return
+    from PIL import Image, ImageDraw, ImageFont
+    import matplotlib.font_manager as fm
+    image = Image.open(png).convert("RGB")
+    W, H = image.size
+    size = max(10, int(LABEL_FONT * W))
+    font = ImageFont.truetype(fm.findfont("DejaVu Sans"), size)
+    halo = max(1, int(LABEL_HALO * size))
+    draw = ImageDraw.Draw(image)
+    taken = []
+    avoid = np.asarray(avoid, dtype=float).reshape(-1, 3)
+
+    def cost(box):
+        x0, y0, x1, y1 = box
+        if x0 < 2 or y0 < 2 or x1 > W - 2 or y1 > H - 2:
+            return np.inf
+        c = 3.0 * sum(1 for b in taken if not (x1 < b[0] or b[2] < x0 or y1 < b[1] or b[3] < y0))
+        if len(avoid):
+            cx = np.clip(avoid[:, 0], x0, x1)
+            cy = np.clip(avoid[:, 1], y0, y1)
+            c += np.count_nonzero((cx - avoid[:, 0]) ** 2 + (cy - avoid[:, 1]) ** 2 < avoid[:, 2] ** 2)
+        return c
+
+    angles = np.radians(np.arange(0, 360, 30))
+    for x, y, text, (dx, dy), r in labels:
+        l, t_, r_, b_ = draw.textbbox((0, 0), text, font=font, stroke_width=halo)
+        w, h = r_ - l, b_ - t_
+        prefer = np.arctan2(dy, dx)
+        order = sorted(angles, key=lambda a: abs(np.angle(np.exp(1j * (a - prefer)))))
+        best = None
+        for ring in range(5):
+            for rank, a in enumerate(order):
+                # distance that clears the drawn point, plus rings further out
+                reach = r + 0.15 * size + abs(np.cos(a)) * w / 2 + abs(np.sin(a)) * h / 2 + ring * 0.5 * size
+                cx, cy = x + np.cos(a) * reach, y - np.sin(a) * reach
+                box = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+                # small penalties: far from the point, far from the preferred side
+                score = cost(box) + 0.2 * ring + 0.02 * rank
+                if best is None or score < best[0]:
+                    best = (score, box)
+            if best[0] < 0.2 * (ring + 1):
+                break
+        box = best[1]
+        taken.append(box)
+        draw.text((box[0] - l, box[1] - t_), text, font=font, fill=(0, 0, 0),
+                  stroke_width=halo, stroke_fill=(255, 255, 255))
+    image.save(png)
+
+
+def _point_labels(figure, size, points, texts, radius, centre=None, bonds=None, bond_radius=None):
+    """Labels for write_labels and discs to avoid, for points (bohr) drawn as spheres of radius
+    (bohr) and seen by the camera of the figure: each label prefers the side away from centre
+    (default: the middle of the points). bonds: index pairs, whose tubes are also avoided."""
+    W, H = _size(size)
+    cam = figure.scene.camera
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    px, _ = project(points, cam, W, H)
+    up = np.asarray(cam.view_up, dtype=float)
+    edge, _ = project(points + radius * up, cam, W, H)
+    radii = np.linalg.norm(edge - px, axis=1)
+    c = px.mean(axis=0) if centre is None else project(np.atleast_2d(centre), cam, W, H)[0][0]
+    labels = []
+    for (x, y), text, r in zip(px, texts, radii):
+        d = np.array([x - c[0], c[1] - y])
+        side = tuple(d / np.linalg.norm(d)) if np.linalg.norm(d) > 1 else (0.7, 0.7)
+        labels.append((x, y, text, side, r))
+    avoid = [(x, y, r) for (x, y), r in zip(px, radii)]
+    if bonds:
+        tube = bond_radius or 0.12
+        # discs along each bond, about one tube radius apart
+        for i, j in {tuple(sorted(b)) for b in bonds}:
+            n = max(2, int(np.linalg.norm(points[i] - points[j]) / tube))
+            seg = points[i] + np.linspace(0, 1, n)[:, None] * (points[j] - points[i])
+            sp, _ = project(seg, cam, W, H)
+            e, _ = project(seg + tube * up, cam, W, H)
+            avoid += [(x, y, rr) for (x, y), rr in zip(sp, np.linalg.norm(e - sp, axis=1))]
+    return labels, avoid
+
+
 # Opacity of the skeleton drawn over the opaque MEP surface (see _save_views_through).
 # 0.5 and 0.7 were compared on H2CO and CH3I; 0.6 keeps the colours of the surface readable.
 SKELETON_THROUGH = 0.6
 
 
 def _save_views_through(figure, file_name, elements_3D_coords, atom_pairs, atoms_Z, size=None,
-                        alpha=SKELETON_THROUGH):
+                        alpha=SKELETON_THROUGH, extrema=None):
     """As _save_views, for an opaque surface hiding the molecule: the skeleton (atoms and bonds),
     rendered alone with the same camera, is drawn over the picture with the opacity alpha, so
     that the positions of the atoms stay visible through the surface ("X-ray" view).
@@ -293,20 +477,29 @@ def _save_views_through(figure, file_name, elements_3D_coords, atom_pairs, atoms
     for k, view in enumerate(views[:2]):
         name = file_name if k == 0 else f"{root}_cam2{ext}"
         fit_camera(figure, view)
-        mlab.savefig(name, figure=figure, size=_size(size))
+        # no cast shadow: those of the extrema markers looked like dark MEP values
+        _savefig(figure, name, size, shadows=False)
         cam, cam2 = figure.scene.camera, skeleton.scene.camera
         cam2.position, cam2.focal_point = cam.position, cam.focal_point
         cam2.view_up, cam2.view_angle = cam.view_up, cam.view_angle
         skeleton.scene.renderer.reset_camera_clipping_range()
         overlay = f"{root}_skeleton{ext}"
-        mlab.savefig(overlay, figure=skeleton, size=_size(size))
+        # POV-Ray: transparent background (+UA) instead of the magenta key, whose anti-aliased
+        # edges would leave a magenta fringe
+        through_povray = _savefig(skeleton, overlay, size, alpha=True, shadows=False)
         picture = mpimg.imread(name)[..., :3]
-        atoms = mpimg.imread(overlay)[..., :3]
+        overlay_rgba = mpimg.imread(overlay)
+        atoms = overlay_rgba[..., :3]
         os.remove(overlay)
-        if atoms.shape == picture.shape:
+        if through_povray and overlay_rgba.shape[-1] == 4 and atoms.shape == picture.shape:
+            drawn = alpha * overlay_rgba[..., 3:4]
+            mpimg.imsave(name, np.clip(drawn * atoms + (1 - drawn) * picture, 0, 1))
+        elif atoms.shape == picture.shape:
             background = (atoms[..., 0] > 0.9) & (atoms[..., 1] < 0.1) & (atoms[..., 2] > 0.9)
             drawn = (~background)[..., None]
             mpimg.imsave(name, np.clip(np.where(drawn, alpha * atoms + (1 - alpha) * picture, picture), 0, 1))
+        labels, avoid = _extrema_labels(figure, size, extrema, name)
+        write_labels(name, labels, avoid)
     mlab.close(skeleton)
     return figure
 
@@ -318,7 +511,7 @@ def _save_views(figure, file_name, elements_3D_coords, atom_pairs, atoms_Z, size
     root, ext = os.path.splitext(file_name)
     for k, view in enumerate(views[:2]):
         fit_camera(figure, view)
-        mlab.savefig(file_name if k == 0 else f"{root}_cam2{ext}", figure=figure, size=_size(size))
+        _savefig(figure, file_name if k == 0 else f"{root}_cam2{ext}", size)
     return figure
 
 ## Set the Iso contour value for mayavi from a percent
@@ -362,10 +555,16 @@ def CalcCutOff(data,IsoContourPercent=30):
 
 def _iso_surfaces(source, figure, cutoffs_and_colors):
     """Iso-surfaces of source at each (cutoff, color), skipping the None cutoffs (see CalcCutOff)."""
-    return [mlab.pipeline.iso_surface(source, figure=figure, contours=[cut], color=color, opacity=surf_opacity)
+    return [_shine(mlab.pipeline.iso_surface(source, figure=figure, contours=[cut], color=color, opacity=surf_opacity))
             for cut, color in cutoffs_and_colors if cut is not None]
 
 ## Visualize
+
+# Margin of the molecule picture (FRAME_MARGIN elsewhere): room for the atom labels
+TOPOLOGY_MARGIN = 1.3
+# Radius of the atom spheres of _init_scene (bohr; scale_factor 0.5 is the diameter)
+ATOM_RADIUS = 0.25
+
 
 def viz_topology(elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=None):
     """Picture of the molecule with the symbol and number of each atom (``-TOPOLOGY.png``),
@@ -381,19 +580,23 @@ def viz_topology(elements_3D_coords, atom_pairs, atoms_Z, file_name=None, size=N
     """
     geom = np.array(elements_3D_coords).reshape((-1,3))/units.a0_to_A
     figure = _init_scene(elements_3D_coords, atom_pairs, atoms_Z)
-    view = views_of(elements_3D_coords, atom_pairs, atoms_Z)[0]
-    ## Show labels and numbers ( = indices + 1 ), slightly in front of the atoms
-    label_offset = 0.5 * np.asarray(view.direction)
-    for i, atom in enumerate(atoms_Z):
-        P, label = geom[i], tab[atom][1]
-        mlab.text3d(*(P + label_offset), label + str(i + 1), color=(0, 0, 0), scale=0.2, figure=figure)
-    fit_camera(figure, view)
-    if file_name is not None:
-        mlab.savefig("{}-TOPOLOGY.png".format(file_name), figure=figure, size=_size(size))
+    texts = [tab[z][1] + str(i + 1) for i, z in enumerate(atoms_Z)]
+    # Second picture when the other pictures have one (camera.choose_views, output.camera_views),
+    # so that the atom numbers can be followed on both
+    for k, view in enumerate(views_of(elements_3D_coords, atom_pairs, atoms_Z)[:2]):
+        # wider margin: the labels are written outside the atoms
+        fit_camera(figure, view, margin=TOPOLOGY_MARGIN)
+        if file_name is None:
+            continue
+        name = "{}-TOPOLOGY{}.png".format(file_name, "" if k == 0 else "_cam2")
+        _savefig(figure, name, size)
+        labels, avoid = _point_labels(figure, size, geom, texts, ATOM_RADIUS,
+                                      bonds=atom_pairs, bond_radius=BOND_RADIUS)
+        write_labels(name, labels, avoid)
     mlab.close()
 
 @_reduced_grid("smooth")
-def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=None, positive_color=None, negative_color=None):
+def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=None, labels=None, size=None, kind="MO"):
     """Pictures of molecular orbitals (``-MO-<label>.png``), positive and negative lobes at
     the iso-values enclosing 20 % of each sign (CalcCutOff).
 
@@ -410,8 +613,8 @@ def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=Non
     labels : list of str, optional
         Labels of the orbitals in the file names (index when omitted).
     size : tuple of int, optional
-    positive_color, negative_color : tuple of float, optional
-        Colours of the lobes (colors["OM"] and colors["NEG"] by default).
+    kind : str, optional
+        Colours of the lobes: surface_colors["MO"] (default) or ["NTO"] (output.colors).
     """
     
     # Skip if missing data
@@ -431,8 +634,8 @@ def viz_MO(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=Non
         Cutoffp, Cutoffn = CalcCutOff(series,IsoContourPercent=20) 
         #print(Cutoffp, Cutoffn)
         MO_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
-        surfaces = _iso_surfaces(MO_data, figure, [(Cutoffp, positive_color or colors["OM"]),
-                                                   (Cutoffn, negative_color or colors["NEG"])])
+        surfaces = _iso_surfaces(MO_data, figure, [(Cutoffp, surface_colors[kind]["positive"]),
+                                                   (Cutoffn, surface_colors[kind]["negative"])])
         if file_name is not None:
             _save_views(figure, "{}-MO-{}.png".format(file_name, labels[i] if labels is not None else i), elements_3D_coords, atom_pairs, atoms_Z, size)
         for module in [MO_data] + surfaces:
@@ -463,7 +666,8 @@ def viz_EDD(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, et_sym, file
     for i, series in enumerate(data):
         Cutoffp, Cutoffn = CalcCutOff(series,IsoContourPercent=30) 
         D_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
-        surfaces = _iso_surfaces(D_data, figure, [(Cutoffp, colors["EDD"]), (Cutoffn, colors["NEG"])])
+        surfaces = _iso_surfaces(D_data, figure, [(Cutoffp, surface_colors["EDD"]["positive"]),
+                                                  (Cutoffn, surface_colors["EDD"]["negative"])])
         if file_name is not None:
             # EDD-S<n> (singlet), EDD-T<n> (triplet), EDD-<n> (other, e.g. unrestricted)
             name = "{}-EDD-{}{}".format(file_name, spin_letter(et_sym), labels[i] if labels is not None else i)
@@ -561,23 +765,53 @@ def mep_colorbar(file_name, color_range, width=6.0):
 # (output.image_grid_reduction), markers and numbers were half hidden.
 EXTREMA_OFFSET = 0.7
 EXTREMA_MARKER_SIZE = 0.45
-EXTREMA_LABEL_SIZE = 0.55
+
+
+def _marker_position(ext):
+    """Position (bohr) of the marker of an extremum, outside the surface."""
+    return np.asarray(ext["position"], dtype=float) + EXTREMA_OFFSET * np.asarray(ext["direction"], dtype=float)
+
+
+# A marker is numbered when it is seen: the picture shows its colour (black, white or grey,
+# spread of the RGB components below this), not the saturated colours of the surface.
+# Why: a test on the orientation of the surface (outward direction towards the camera) left
+# the markers standing out at the edge of the surface without a number (HCFClBr, 26/11/2026).
+EXTREMA_SEEN_SPREAD = 0.2
+
+
+def _extrema_labels(figure, size, extrema, picture):
+    """Labels (write_labels) of the markers seen in the picture (file): the numbers of the
+    markers hidden by the surface are not written."""
+    if not extrema:
+        return [], []
+    import matplotlib.image as mpimg
+    image = mpimg.imread(picture)[..., :3]
+    H, W = image.shape[:2]
+    points = np.array([_marker_position(e) for e in extrema])
+    px, _ = project(points, figure.scene.camera, W, H)
+    seen = []
+    for number, (x, y) in enumerate(px, start=1):
+        i, j = int(round(y)), int(round(x))
+        if not (1 <= i < H - 1 and 1 <= j < W - 1):
+            continue
+        rgb = image[i - 1:i + 2, j - 1:j + 2].reshape(-1, 3).mean(axis=0)
+        if rgb.max() - rgb.min() < EXTREMA_SEEN_SPREAD:
+            seen.append(number - 1)
+    if not seen:
+        return [], []
+    return _point_labels(figure, size, points[seen], [str(k + 1) for k in seen], EXTREMA_MARKER_SIZE / 2)
 
 
 def _draw_extrema(figure, extrema):
-    """Numbered markers of the MEP extrema (numbers of the report table): white spheres for
-    the minima, black spheres for the maxima, black numbers next to them."""
+    """Markers of the MEP extrema: white spheres for the minima, black spheres for the maxima;
+    their numbers (those of the report table) are written by _extrema_labels."""
     if not extrema:
         return
     for number, ext in enumerate(extrema, start=1):
-        direction = np.asarray(ext["direction"], dtype=float)
-        p = np.asarray(ext["position"], dtype=float) + EXTREMA_OFFSET * direction
+        p = _marker_position(ext)
         color = (1.0, 1.0, 1.0) if ext["kind"] == "min" else (0.0, 0.0, 0.0)
         mlab.points3d(p[0], p[1], p[2], figure=figure, mode="sphere", color=color,
                       resolution=12, scale_factor=EXTREMA_MARKER_SIZE)
-        q = p + 1.2 * EXTREMA_LABEL_SIZE * direction
-        mlab.text3d(q[0], q[1], q[2], str(number), figure=figure, color=(0.0, 0.0, 0.0),
-                    scale=EXTREMA_LABEL_SIZE, orient_to_camera=True)
 
 
 @_reduced_grid("smooth")
@@ -651,7 +885,8 @@ def viz_Potential(r_data, V_data, X, Y, Z, elements_3D_coords, atom_pairs, atoms
     surf.module_manager.scalar_lut_manager.lut.table = TURBO_TABLE
     _draw_extrema(figure, extrema)
     if file_name is not None:
-        _save_views_through(figure, "{}-MEP.png".format(file_name), elements_3D_coords, atom_pairs, atoms_Z, size)
+        _save_views_through(figure, "{}-MEP.png".format(file_name), elements_3D_coords, atom_pairs, atoms_Z, size,
+                            extrema=extrema)
         mep_colorbar("{}-MEP_colorbar.png".format(file_name), color_range)
     mlab.close(figure)
 
@@ -675,7 +910,8 @@ def viz_Fukui(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=
     figure = _init_scene(elements_3D_coords, atom_pairs, atoms_Z) 
     Cutoffp, Cutoffn = CalcCutOff(data,IsoContourPercent=30) 
     F_data = mlab.pipeline.scalar_field(X, Y, Z, data, figure=figure)
-    surfaces = _iso_surfaces(F_data, figure, [(Cutoffp, (0.0, 0.5, 0.5)), (Cutoffn, (0.95, 0.95, 0.95))])
+    surfaces = _iso_surfaces(F_data, figure, [(Cutoffp, surface_colors["fukui"]["positive"]),
+                                              (Cutoffn, surface_colors["fukui"]["negative"])])
     
     if file_name is not None:
         _save_views(figure, "{}-fukui-{}.png".format(file_name, labels), elements_3D_coords, atom_pairs, atoms_Z, size)
@@ -693,7 +929,8 @@ def viz_Fdual(data, X, Y, Z, elements_3D_coords, atom_pairs, atoms_Z, file_name=
 
     F_data = mlab.pipeline.scalar_field(X, Y, Z, data, figure=figure)
     #print("positive Cutoff :", Cutoffp)
-    surfaces = _iso_surfaces(F_data, figure, [(Cutoffp, (0.0, 0.5, 0.5)), (Cutoffn, (0.95, 0.95, 0.95))])
+    surfaces = _iso_surfaces(F_data, figure, [(Cutoffp, surface_colors["fukui"]["positive"]),
+                                              (Cutoffn, surface_colors["fukui"]["negative"])])
 
     if file_name is not None:
         _save_views(figure, "{}-Fdual.png".format(file_name), elements_3D_coords, atom_pairs, atoms_Z, size)

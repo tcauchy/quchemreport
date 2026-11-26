@@ -211,6 +211,8 @@ class ResultsExcitedStates(CustomModel):
     et_energies: Union[List[float], Dict[str, Any]] = None # TODO : TO CHECK (Not sure for the type)
     et_oscs: List[float] = None # TODO : TO CHECK (Not sure for the type)
     et_sym : List[str] = None # TODO : TO CHECK (Not sure for the type)
+    # <S^2> of the excited states of an open-shell reference (scanlog._unrestricted_states)
+    et_s2: List[float] = None
     et_transitions: List[List[Tuple[Tuple[int, int], Tuple[int, int], float]]] = None # TODO : TO CHECK (Not sure for the type)
     et_rot: List[float] = None # TODO : TO CHECK (Not sure for the type)
     et_eldips: List[List[float]] = None # TODO : TO CHECK (Not sure for the type)

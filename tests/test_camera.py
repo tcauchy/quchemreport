@@ -176,3 +176,37 @@ def test_picture_framing(name, tmp_path):
     x0, y0, x1, y1 = _drawn_box(tmp_path / "t-TOPOLOGY.png")
     assert min(x0, y0, 1 - x1, 1 - y1) > 0.005
     assert max(x1 - x0, y1 - y0) > 0.75
+
+
+@pytest.mark.parametrize("name", ["mol07", "mol08", "mol09"])
+def test_forced_number_of_views(name):
+    """output.camera_views: 1 drops view 2, 2 adds one at 60-90 degrees when auto gives none,
+    and keeps the automatic view 2 when there is one."""
+    Z, xyz, pairs = load(name)
+    auto = camera.choose_views(xyz, Z, pairs)
+    one = camera.choose_views(xyz, Z, pairs, n_views=1)
+    two = camera.choose_views(xyz, Z, pairs, n_views=2)
+    assert len(one) == 1 and np.allclose(one[0].direction, auto[0].direction)
+    assert len(two) == 2 and np.allclose(two[0].direction, auto[0].direction)
+    if len(auto) == 2:
+        assert two[1].reason == auto[1].reason
+    else:
+        assert two[1].reason == "requested" and abs(two[0].direction @ two[1].direction) < 0.5
+    with pytest.raises(ValueError):
+        camera.choose_views(xyz, Z, pairs, n_views=3)
+
+
+def test_forced_views_of_a_linear_molecule():
+    """Two views of a linear molecule would be the same picture: one view."""
+    xyz = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.21]])
+    assert [v.reason for v in camera.choose_views(xyz, [8, 8], [(0, 1)], n_views=2)] == ["linear"]
+
+
+def test_camera_views_option():
+    """output.camera_views: auto (any case), 1 or 2, also written as strings."""
+    from quchemreport.config.config import Output
+    for given, read in [("auto", "auto"), ("AUTO", "auto"), (1, 1), ("2", 2)]:
+        assert Output.validate_camera_views(given) == read
+    for wrong in (0, 3, True, "both"):
+        with pytest.raises(ValueError):
+            Output.validate_camera_views(wrong)

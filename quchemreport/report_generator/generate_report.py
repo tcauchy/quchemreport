@@ -27,9 +27,16 @@ from cclib.parser.utils import PeriodicTable
 from quchemreport.config.config import Config, OutputInclude
 from quchemreport.utility_services.computed_data import ComputedData, config_logfile
 from quchemreport.utility_services.log_data import functional_label
-from quchemreport.utility_services.parameters import THRESHOLD_IR_INTENSITIES
+from quchemreport.utility_services.parameters import THRESHOLD_IR_INTENSITIES, surface_color_names
+# km/mol: below this for every mode, the molecule has no IR-active vibration (O2, N2...)
+IR_INACTIVE = 0.1
 from quchemreport.utility_services.units import nm_to_wnb, Eh_to_Kcal_mol, a0_to_A
+from quchemreport.data_enrichment import mep_surface
 from quchemreport.utility_services.naming import spin_letter, state_label, state_number
+
+# Paragraph column without justification (needs the array package): the justified lists of
+# log files were stretched with large spaces and hyphenated (SP-plus.log)
+RAGGED = r">{\raggedright\arraybackslash}p"
 
 # TODO : NEED TO THINK ABOUT THE MAX VALUE
 MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE = 15
@@ -86,6 +93,78 @@ def figure_two_col(doc, nomPng, nomPng2, taillePng="7cm", caption="Figure", esca
     doc.append(NoEscape(r'\end{figure}'))
 
 
+# Height kept for the pictures of one grid figure (A4, 15 mm margins: the text block is about
+# 250 mm high; the rest is left for the caption so that a figure never exceeds a page).
+GRID_MAX_HEIGHT_MM = 190
+TEXT_WIDTH_MM = 180
+
+
+def color_of(kind, sign, capital=False):
+    """Name of the positive or negative surface colour of kind (MO, EDD, fukui, NTO) for the
+    captions: output.colors of the YAML or the default (parameters.set_surface_colors), so
+    that the captions follow the colours chosen by the user. Not escaped: the captions are."""
+    name = surface_color_names[kind][sign]
+    return name[:1].upper() + name[1:] if capital else name
+
+
+def figure_grid(doc, cells, ncol, caption, escapeCaption=True, max_width=None):
+    """Add the pictures of several states or orbitals as a grid, with one label under each cell.
+
+    Replaces one figure per picture (a third of a page each): the 10 density differences and
+    the 11 NTO pairs of the acetone test series took 9 pages, against 3 with the grid. Each
+    cell holds one picture, or two side by side (two views, alpha/beta, hole/electron). A
+    grid taller than GRID_MAX_HEIGHT_MM is split into several figures, the next ones with
+    "(continued)" in the caption, so that the cells are not cut by a page break. Any list of
+    cells is accepted: the states shown are the ones whose pictures exist.
+
+    Parameters
+    ----------
+    doc : pylatex container
+    cells : list of (list of str, str)
+        Picture files (relative to the output folder) and label of each cell; the label is
+        LaTeX code (escape it before).
+    ncol : int
+        Cells per row.
+    caption : str
+    escapeCaption : bool, optional
+        Escape the LaTeX special characters of the caption.
+    max_width : float, optional
+        Largest width of a cell, as a fraction of the text width (the orbitals are kept at
+        about the 7 cm of the former single figures instead of half the page).
+    """
+    if not cells:
+        return
+    if escapeCaption:
+        caption = escape_latex(caption)
+    gap = 0.01
+    # rounded down: 3 x 0.327 + 2 x 0.01 exceeded the line and left 2 cells per row
+    width = int(1000 * (1.0 - gap * (ncol - 1)) / ncol) / 1000
+    if max_width is not None:
+        width = min(width, max_width)
+    n_pictures = max(len(pngs) for pngs, _ in cells)
+    # square pictures: height of a row = width of a picture + label
+    row_mm = TEXT_WIDTH_MM * width / n_pictures + 6
+    rows_per_figure = max(1, int(GRID_MAX_HEIGHT_MM // row_mm))
+    per_figure = rows_per_figure * ncol
+    chunks = [cells[i:i + per_figure] for i in range(0, len(cells), per_figure)]
+    for c, chunk in enumerate(chunks):
+        doc.append(NoEscape(r'\begin{figure}[H]'))
+        doc.append(NoEscape(r'\centering'))
+        for k, (pngs, label) in enumerate(chunk):
+            if k and k % ncol == 0:
+                doc.append(NoEscape(r'\\[2mm]'))
+            elif k:
+                doc.append(NoEscape(r'\hspace{' + f'{gap}' + r'\textwidth}%'))
+            sub = 1.0 / len(pngs)
+            doc.append(NoEscape(r'\begin{minipage}[t]{' + f'{width:.3f}' + r'\textwidth}\centering'))
+            doc.append(NoEscape(''.join(r'\includegraphics[width=' + f'{sub:.3f}' + r'\linewidth]{' + p + '}'
+                                        for p in pngs) + '%'))
+            doc.append(NoEscape(r'\\[-1mm]{\footnotesize ' + label + '}'))
+            doc.append(NoEscape(r'\end{minipage}%'))  # % : no space between the cells
+        doc.append(NoEscape(r'\caption{' + caption + (' (continued)' if c else '') + '}'))
+        doc.append(NoEscape(r'\end{figure}'))
+
+
 def sanitize_filename(name: str) -> str:
     """Name usable in a file name: characters other than letters, digits, _ and - become _."""
     return re.sub(r'[^A-Za-z0-9_-]+', '_', name)
@@ -115,6 +194,9 @@ def generate_empty_document(report_type):
     # packages
     doc.packages.append(NoEscape(r'\usepackage{xcolor}'))
     doc.packages.append(NoEscape(r'\usepackage{longtable}'))
+    # array: ragged-right paragraph columns (>{\raggedright\arraybackslash}p{}), the justified
+    # lists of log files were stretched with large spaces
+    doc.packages.append(NoEscape(r'\usepackage{array}'))
     doc.packages.append(NoEscape(r'\usepackage{graphicx}'))
     
     # Add 'float' to force figures at exact positions with [H].
@@ -177,9 +259,19 @@ def render_ref_molecule_representation(section, output_dir, computed_data: Compu
         print(f"{nomPng} not found. Molecule representation for the reference can not be added to the report.\n")
         return False
     
-    figure_one_col(section, nomPng, caption=f"Chemical structure diagram with atomic numbering. (Source: {log_file})")
-    
+    topology_figure(section, output_dir, nomPng, f"(Source: {log_file})")
     return True
+
+
+def topology_figure(doc, output_dir, nomPng, source):
+    """Molecule picture with the atom numbers, and its second view when there is one."""
+    nomPng2 = nomPng.replace("-TOPOLOGY.png", "-TOPOLOGY_cam2.png")
+    caption = "Chemical structure diagram with atomic numbering"
+    if os.path.isfile(output_dir + nomPng2):
+        figure_grid(doc, [([nomPng, nomPng2], "")], 1, max_width=0.8,
+                    caption=f"{caption} (two points of view). {source}")
+    else:
+        figure_one_col(doc, nomPng, caption=f"{caption}. {source}")
 
 
 def render_grouped_values_with_logs(table, label, values, log_files, ref_id, table_col):
@@ -293,7 +385,7 @@ def fill_logfiles_details_section(doc, computed_data, config: Config):
         log_files = computed_data.metadata.log_files
         job_types = computed_data.comp_details.general.job_type
         
-        with doc.create(LongTable("p{0.2\\textwidth} p{0.8\\textwidth}")) as log_table:
+        with doc.create(LongTable("p{0.2\\textwidth} " + RAGGED + "{0.76\\textwidth}")) as log_table:
             
             # Render a list of log_files and their respective jobtypes
             logfiles_and_jobs = [
@@ -313,7 +405,15 @@ def fill_logfiles_details_section(doc, computed_data, config: Config):
                 if any("_es" in jb for jb in job_types[i]):
                     es_number = config_logfile(config, computed_data, i).excited_state_number
                     if es_number is not None:
-                        es_entries.append(f"State {es_number} ({log})")
+                        # S1/T1 as in the tables ("State 1" did not say which multiplicity)
+                        et_sym_i = computed_data.results.excited_states.et_sym[i]
+                        if et_sym_i and es_number <= len(et_sym_i) and spin_letter(et_sym_i[es_number - 1]):
+                            name = state_label(et_sym_i, es_number - 1)
+                            if state_number(et_sym_i, es_number - 1) != es_number:
+                                name += f" (state {es_number} of the log)"
+                        else:
+                            name = f"State {es_number}"
+                        es_entries.append(f"{name} ({log})")
             if es_entries:
                 log_table.add_row(["", ""])
                 log_table.add_row(['Optimized Excited State', "\n".join(es_entries)])
@@ -338,7 +438,7 @@ def render_molecule_identification(section, computed_data: ComputedData, designa
     bool
         Whether something was added to the section.
     """
-    with section.create(LongTable("p{0.2\\textwidth} p{0.8\\textwidth}")) as mol_table:
+    with section.create(LongTable("p{0.2\\textwidth} " + RAGGED + "{0.76\\textwidth}")) as mol_table:
 
         ref_id = computed_data.metadata.ref_log_file_idx
         log_files = computed_data.metadata.log_files
@@ -409,12 +509,15 @@ def render_atomic_coordinates_table(doc, atoms, atoms_Z, log_file: str, table_ti
     doc.append(NoEscape(r'\begin{footnotesize}'))
     doc.append(NoEscape(r'\begin{center}'))
 
-    with doc.create(LongTable('p{0.5cm}rrrrp{0.5cm}')) as table:
+    # tabular for the small molecules: a longtable left its title alone at the bottom of a page
+    table_class = Tabular if len(atoms) <= 40 else LongTable
+    with doc.create(table_class('p{0.5cm}rrrrp{0.5cm}')) as table:
         table.add_row(
             [MultiColumn(6, align='c', data=table_title)]
         )
         table.add_row(
-            [MultiColumn(6, align='l', data=f"Source: {log_file}")]
+            # paragraph column: the list of the models at the same geometry would widen the table
+            [MultiColumn(6, align=NoEscape('p{6.5cm}'), data=f"Source: {log_file}")]
         )
         table.add_hline()
         table.add_row([
@@ -449,6 +552,57 @@ def coordinates_title(computed_data, log_idx):
     return "Table. Converged cartesian atomic coordinates in Angstroms"
 
 
+# Two geometries are the same when no coordinate differs by more than this (Angstrom); the
+# tables print 4 decimals.
+SAME_GEOMETRY_TOL = 5e-4
+
+
+def geometry_groups(computed_data):
+    """Models grouped by geometry, the group of the reference first.
+
+    Only the reference geometry and the geometries that differ from it (optimizations of
+    ions or excited states) are worth a table: the frequency, TD and single-point models
+    computed at the reference geometry repeated the same table (nine tables for the acetone
+    test series instead of three). Models with the same geometry share one table.
+
+    Returns
+    -------
+    list of (numpy.ndarray, list of int)
+        Coordinates (n_atoms x 3) and the indexes of the models with these coordinates.
+    """
+    ref_id = computed_data.metadata.ref_log_file_idx
+    all_atoms = computed_data.results.geometry.elements_3D_coords
+    order = [ref_id] + [i for i in range(len(all_atoms)) if i != ref_id]
+    groups = []
+    for i in order:
+        if all_atoms[i] is None or computed_data.molecule.atoms_Z[i] is None:
+            continue
+        atoms = np.array(all_atoms[i], dtype=float).reshape((-1, 3))
+        for coords, members in groups:
+            if coords.shape == atoms.shape and np.max(np.abs(coords - atoms)) <= SAME_GEOMETRY_TOL:
+                members.append(i)
+                break
+        else:
+            groups.append((atoms, [i]))
+    return groups
+
+
+def render_coordinates_group(doc, computed_data, coords, members):
+    """Coordinate table of one geometry group (see geometry_groups), with all its sources."""
+    log_files = computed_data.metadata.log_files
+    first = members[0]
+    sources = log_files[first]
+    if len(members) > 1:
+        sources += " (same geometry: " + ", ".join(log_files[i] for i in members[1:]) + ")"
+    render_atomic_coordinates_table(
+        doc=doc,
+        atoms=coords,
+        atoms_Z=computed_data.molecule.atoms_Z[first],
+        log_file=sources,
+        table_title=coordinates_title(computed_data, first),
+    )
+
+
 def render_ref_atomic_coordinates(section, computed_data: ComputedData):
     """Coordinates of the reference in the molecule section, for molecules with fewer than MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE atoms (larger ones at the end of the report).
 
@@ -475,14 +629,9 @@ def render_ref_atomic_coordinates(section, computed_data: ComputedData):
     if len(atoms) >= MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE:
         return False
 
-    render_atomic_coordinates_table(
-        doc=section,
-        atoms=atoms,
-        atoms_Z=atoms_Z,
-        log_file=log_file,
-        table_title=coordinates_title(computed_data, ref_id),
-    )
-    
+    coords, members = geometry_groups(computed_data)[0]
+    render_coordinates_group(section, computed_data, coords, members)
+
     return True
 
 def fill_molecule_section(doc, output_dir, computed_data: ComputedData, designated_name, report_type, config_output: OutputInclude):
@@ -511,132 +660,162 @@ def fill_molecule_section(doc, output_dir, computed_data: ComputedData, designat
         doc.append(section)
 
 
+def program_label(package, version):
+    """Program and version as chemists write them: 'Gaussian 09, revision D.01' (cclib
+    package_version '2009+D.01'), 'ORCA 6.1.0' ('6.1.0.post0')."""
+    names = {"gaussian": "Gaussian", "orca": "ORCA", "gamess": "GAMESS"}
+    name = names.get(str(package).lower(), str(package)) if package else ""
+    if version is None:
+        return name or None
+    v = str(version)
+    if name == "Gaussian":
+        m = re.match(r"(\d{4})\+(\S+)", v)
+        if m:
+            return f"Gaussian {m.group(1)[2:]}, revision {m.group(2)}"
+    if name == "ORCA":
+        v = v.split(".post")[0]
+    return f"{name} {v}".strip()
+
+
+def states_summary(et_sym):
+    """'10 singlets, 10 triplets' from the symmetries of the states read in the log."""
+    if not et_sym:
+        return ""
+    counts = {}
+    for sym in et_sym:
+        letter = spin_letter(sym)
+        kind = {"S": "singlet", "T": "triplet"}.get(letter, "state")
+        counts[kind] = counts.get(kind, 0) + 1
+    order = ["singlet", "triplet", "state"]
+    return ", ".join(f"{counts[kind]} {kind}{'s' if counts[kind] > 1 else ''}"
+                     for kind in order if kind in counts)
+
+
+# Columns of the geometry convergence criteria (cclib geovalues / geotargets) by program
+GEOMETRY_CRITERIA = {
+    "gaussian": ["Max force", "RMS force", "Max displ.", "RMS displ."],
+    "gamess": ["Max force", "RMS force"],
+}
+
+
 def fill_computational_details_section(doc, computed_data: ComputedData):
-    
-    """Computational details section: program and versions, method, functional (with its
-    dispersion correction), basis set, closed shell, grid, solvent, convergence targets,
-    grouped by value over the log files (render_grouped_values_with_logs).
+    """Computational details section: a table of the settings, each value with its log files
+    when they differ (render_grouped_values_with_logs), then one table with a row per log
+    file for what is specific to each one (convergence of the optimization, nuclear
+    repulsion energy, temperature, excited states).
+
+    The specific values were blocks of rows under 'Logfile : <name>' (two pages for the
+    acetone test series); the table holds them in a few lines and shows the thresholds once
+    when they are the same for every optimization.
     """
     with doc.create(Section('COMPUTATIONAL DETAILS')) :
-        
+
         ref_id = computed_data.metadata.ref_log_file_idx
-        
-        # List with the name of each logfile
         log_files = computed_data.metadata.log_files
-        
-        # Unique value (string)
-        package = computed_data.comp_details.general.package
-        
-        # All variables below are a list where the index of the value match the index of each logfile
-        package_version = computed_data.comp_details.general.package_version
-        last_theory = computed_data.comp_details.general.last_theory
+        general = computed_data.comp_details.general
+        package = general.package
+        software = str(package).lower() if package else None
+
+        programs = [program_label(package, v) if v is not None else None for v in general.package_version]
         functional = [functional_label(f, d) if f is not None else None
-                      for f, d in zip(computed_data.comp_details.general.functional,
-                                      computed_data.comp_details.general.dispersion)]
-        basis_set_name = computed_data.comp_details.general.basis_set_name
-        basis_set_size = computed_data.comp_details.general.basis_set_size
-        is_closed_shell = computed_data.comp_details.general.is_closed_shell
-        integration_grid = computed_data.comp_details.general.integration_grid
-        solvent = computed_data.comp_details.general.solvent
-        scf_targets = computed_data.comp_details.general.scf_targets
-        geometric_targets = computed_data.comp_details.geometry.geometric_targets
-        geometric_values = computed_data.results.geometry.geometric_values
-        temperature = computed_data.comp_details.freq.temperature
-        anharmonicity = computed_data.comp_details.freq.anharmonicity
-        nuclear_repulsion_energy_from_xyz = computed_data.results.geometry.nuclear_repulsion_energy_from_xyz
-        nb_et_states = computed_data.comp_details.excited_states.nb_et_states
-        et_sym = computed_data.results.excited_states.et_sym
-                
-        with doc.create(LongTable("p{0.6\\textwidth} p{0.2\\textwidth} p{0.2\\textwidth}")) as param_table :
-            software = package
-            
-            # Unique value
-            if (
-                package != None
-                and package_version[ref_id] != None
-            ):
-                param_table.add_row(['Software', package, ""] )
-            
-            render_grouped_values_with_logs(param_table, 'Package Versions', package_version, log_files, ref_id, table_col=3)
-            render_grouped_values_with_logs(param_table, 'Computational method', last_theory, log_files, ref_id, table_col=3)
-            render_grouped_values_with_logs(param_table, 'Functional', functional, log_files, ref_id, table_col=3)
-            render_grouped_values_with_logs(param_table, 'Basis set name', basis_set_name, log_files, ref_id, table_col=3)
-            render_grouped_values_with_logs(param_table, 'Number of basis set functions', basis_set_size, log_files, ref_id, table_col=3)
-            render_grouped_values_with_logs(param_table, 'Closed shell calculation', is_closed_shell, log_files, ref_id, table_col=3)
-            render_grouped_values_with_logs(param_table, 'Integration grid', integration_grid, log_files, ref_id, table_col=3)
-            render_grouped_values_with_logs(param_table, 'Solvent', solvent, log_files, ref_id, table_col=3)
-            
-            # TODO : TO ADD LATER ?
-            # add_row_filter(param_table, ['Solvent reaction filed method',  
-            #                             list_data_models[i].comp_details.general.solvent_reaction_field])
-    
-            # TODO : TO CHECK : Complete the transformation for the output of scfTargers here (only from ref file for now)
-            # Targets of the last SCF of the reference log (one row per SCF cycle)
+                      for f, d in zip(general.functional, general.dispersion)]
+        shell = [None if c is None else ("closed shell" if c else "open shell") for c in general.is_closed_shell]
+
+        doc.append(NoEscape(r'\begin{footnotesize}'))
+        with doc.create(LongTable("p{0.3\\textwidth} " + RAGGED + "{0.66\\textwidth}")) as param_table:
+            render_grouped_values_with_logs(param_table, 'Program', programs, log_files, ref_id, table_col=2)
+            render_grouped_values_with_logs(param_table, 'Computational method', general.last_theory, log_files, ref_id, table_col=2)
+            render_grouped_values_with_logs(param_table, 'Functional', functional, log_files, ref_id, table_col=2)
+            render_grouped_values_with_logs(param_table, 'Basis set', general.basis_set_name, log_files, ref_id, table_col=2)
+            render_grouped_values_with_logs(param_table, 'Number of basis functions', general.basis_set_size, log_files, ref_id, table_col=2)
+            render_grouped_values_with_logs(param_table, 'Electronic structure', shell, log_files, ref_id, table_col=2)
+            render_grouped_values_with_logs(param_table, 'Integration grid', general.integration_grid, log_files, ref_id, table_col=2)
+            render_grouped_values_with_logs(param_table, 'Solvent', general.solvent, log_files, ref_id, table_col=2)
+
+            # Targets of the last SCF of the reference log
+            scf_targets = general.scf_targets
             scfTargets = scf_targets[ref_id][-1] if scf_targets[ref_id] else None
-            if software=="gaussian" and scfTargets is not None and len(scfTargets) >= 3: # Gaussian or GAUSSIAN (upper/lower?
-                param_table.add_row(["Requested SCF convergence on RMS and Max density matrix", scfTargets[0], scfTargets[1]  ])
-                param_table.add_row(["Requested SCF convergence on energy", scfTargets[2], " "  ])
-            if software=="gamess" and scfTargets is not None:
-                param_table.add_row(["Requested SCF convergence on density", scfTargets[0], " "   ])
-            
-            
-            param_table.add_row([" ", " " , " "])
-            
-            
-            # Display specific calculations parameters
-            ordered_logfiles_indices = [ref_id] + [i for i in range(len(log_files)) if i != ref_id]
-            for i in ordered_logfiles_indices:
-                log = log_files[i]
-                geom_targets = geometric_targets[i]
-                geom_values = None
-                if geometric_values[i] is not None:
-                    geom_values = geometric_values[i][-1]
-                temp = temperature[i]
-                anh = anharmonicity[i]
-                nre_from_xyz = nuclear_repulsion_energy_from_xyz[i]
-                nb_states = nb_et_states[i]
-                et_sym_i = et_sym[i]
-                
-                # Skip if no data is available
-                if (
-                    geom_targets == None
-                    and geom_values == None
-                    and temp == None
-                    and anh == None
-                    and nb_states == None
-                    and et_sym_i == None
-                ):
-                    continue
-                
-                param_table.add_row([f"Logfile : {log}", "", ""])
+            if software == "gaussian" and scfTargets is not None and len(scfTargets) >= 3:
+                param_table.add_row(["SCF convergence targets",
+                                     f"RMS density {scfTargets[0]:g}, max density {scfTargets[1]:g}, "
+                                     f"energy {scfTargets[2]:g} (reference log)"])
+            if software == "gamess" and scfTargets is not None:
+                param_table.add_row(["SCF convergence target", f"density {scfTargets[0]:g} (reference log)"])
+        doc.append(NoEscape(r'\end{footnotesize}'))
 
-                # geometric optimization
-                if geom_targets is not None and geom_values is not None:
-                    if software=="gaussian":
-                        param_table.add_row(["Max Force value and threshold", f"{geom_values[0]:.6f}", f"{geom_targets[0]:.6f}"])
-                        param_table.add_row(["RMS Force value and threshold", f"{geom_values[1]:.6f}", f"{geom_targets[1]:.6f}"])
-                        param_table.add_row(["Max Displacement value and threshold", f"{geom_values[2]:.6f}", f"{geom_targets[2]:.6f}"])
-                        param_table.add_row(["RMS Displacement value and threshold", f"{geom_values[3]:.6f}", f"{geom_targets[3]:.6f}"])
-                    if software=="gamess" :
-                        # in Hartrees per Bohr
-                            param_table.add_row(["Max Force value and threshold", geom_values[0] , geom_values[0]])
-                            param_table.add_row(["RMS Force value and threshold",  geom_values[1] , geom_values[1]])    
-                            
-                
-                # frequencies / thermochemistry
-                if temp is not None:
-                    param_table.add_row(["Temperature", f"{temp:.2f} K", ""])
-                if anh is not None:
-                    param_table.add_row(["Anharmonic effects", f"{anh}", ""])
-                if nre_from_xyz is not None:
-                    param_table.add_row(['Converged nuclear repulsion energy', f"{nre_from_xyz:.5f} Hartrees", ""])
+        render_log_specific_table(doc, computed_data, software)
 
-                # Paramètres états excités
-                if nb_states is not None and et_sym_i is not None:
-                    unique_syms = np.unique(et_sym_i)
-                    param_table.add_row(['Number of calculated excited states and spin state', f"{nb_states}", f"{', '.join(unique_syms)}"])
-                    
-                param_table.add_row([" ", " ", ""])
+
+def render_log_specific_table(doc, computed_data: ComputedData, software):
+    """Table with one row per log file: convergence of the optimization (value, and the
+    threshold in a first row when it is the same for all), nuclear repulsion energy,
+    temperature and anharmonicity of the frequencies, excited states read."""
+    ref_id = computed_data.metadata.ref_log_file_idx
+    log_files = computed_data.metadata.log_files
+    geometric_targets = computed_data.comp_details.geometry.geometric_targets
+    geometric_values = computed_data.results.geometry.geometric_values
+    temperature = computed_data.comp_details.freq.temperature
+    anharmonicity = computed_data.comp_details.freq.anharmonicity
+    nre = computed_data.results.geometry.nuclear_repulsion_energy_from_xyz
+    et_sym = computed_data.results.excited_states.et_sym
+
+    criteria = GEOMETRY_CRITERIA.get(software, [])
+    n_crit = len(criteria)
+    order = [ref_id] + [i for i in range(len(log_files)) if i != ref_id]
+    geo = {}
+    for i in order:
+        if n_crit and geometric_targets[i] is not None and geometric_values[i] is not None \
+                and len(geometric_targets[i]) >= n_crit and len(geometric_values[i][-1]) >= n_crit:
+            geo[i] = (list(geometric_values[i][-1][:n_crit]), list(geometric_targets[i][:n_crit]))
+    same_targets = len({tuple(t) for _, t in geo.values()}) == 1
+    show_geo = bool(geo)
+
+    rows = []
+    for i in order:
+        other = []
+        if temperature[i] is not None:
+            other.append(f"T = {temperature[i]:.2f} K")
+        if anharmonicity[i] is not None:
+            other.append("anharmonic")
+        states = states_summary(et_sym[i])
+        if states:
+            other.append(states)
+        if i not in geo and nre[i] is None and not other:
+            continue
+        cells = [log_files[i]]
+        if show_geo:
+            if i in geo:
+                values, targets = geo[i]
+                cells += [f"{v:.6f}" if same_targets else f"{v:.6f} ({t:.6f})" for v, t in zip(values, targets)]
+            else:
+                cells += [""] * n_crit
+        cells.append(f"{nre[i]:.5f}" if nre[i] is not None else "")
+        cells.append("; ".join(other))
+        rows.append(cells)
+    if not rows:
+        return
+
+    ncols = 1 + (n_crit if show_geo else 0) + 2
+    doc.append(NoEscape(r'\begin{footnotesize}'))
+    doc.append(NoEscape(r'\begin{center}'))
+    with doc.create(Tabular(RAGGED + "{0.17\\textwidth}" + " r" * (ncols - 3) + " r " + RAGGED + "{0.22\\textwidth}")) as table:
+        title = "Table. Specific results of each log file"
+        if show_geo:
+            title += (": convergence of the geometry optimization (last step, atomic units)"
+                      + ("" if same_targets else ", value (threshold)"))
+        table.add_row([MultiColumn(ncols, align='c', data=title)])
+        table.add_hline()
+        table.add_row(["Log file"] + (criteria if show_geo else [])
+                      + [NoEscape(r"$E_{\mathrm{nuc}}$ (hartrees)"), "Other"])
+        table.add_hline()
+        if show_geo and same_targets:
+            targets = next(iter(geo.values()))[1]
+            table.add_row([italic("Threshold")] + [f"{t:.6f}" for t in targets] + ["", ""])
+        for cells in rows:
+            table.add_row(cells)
+        table.add_hline()
+    doc.append(NoEscape(r'\end{center}'))
+    doc.append(NoEscape(r'\end{footnotesize}'))
 
 
 def serialize_energies_data(total_energy, homo_ind, MO_energies, MO_labels, MO_indexes):
@@ -650,78 +829,36 @@ def serialize_energies_data(total_energy, homo_ind, MO_energies, MO_labels, MO_i
     }, sort_keys=True)
 
 
-def render_energies_table(doc, computed_data: ComputedData, log_indexes):
-    """Table of the total energy and of the requested orbital energies, for a group of models with the same values."""
+def energies_rows(computed_data: ComputedData, log_indexes):
+    """Rows of the energy table for a group of models with the same values (see render_energies).
+
+    Returns
+    -------
+    list of list
+        [models, calculation, total energy, HOMO number, energies of the requested orbitals]
+        for each set of orbitals (one row, or alpha and beta rows for unrestricted models).
+    """
     log_files = computed_data.metadata.log_files
     i_log = log_indexes[0]
-    
     total_energy = computed_data.results.wavefunction.total_molecular_energy[i_log]
     homo_ind = computed_data.results.wavefunction.homo_indexes[i_log]
     MO_energies = computed_data.results.wavefunction.MO_energies[i_log]
     MO_labels = computed_data.derived.wavefunction.MO_analysis.MO_labels[i_log]
     MO_indexes = computed_data.derived.wavefunction.MO_analysis.MO_indexes[i_log]
-
-    
-    if (
-        total_energy is None 
-        and (
-            MO_energies is None
-            or homo_ind is None
-            or MO_indexes is None
-            or MO_labels is None
-        )
-    ):
-        return
-
-    with doc.create(LongTable("p{0.6\\textwidth} p{0.2\\textwidth} p{0.2\\textwidth}")) as wavefunction_table:
-        
-        sources = ", ".join([log_files[idx] for idx in log_indexes])
-        wavefunction_table.add_row(
-            [MultiColumn(3, align='l', data=f"Wavefunction Energies (Sources: {sources})")]
-        )
-        
-        if total_energy is not None:
-            wavefunction_table.add_row(['Total molecular energy', "%.5f hartrees" % total_energy, " "])
-
-        if (
-            MO_energies is None
-            or homo_ind is None
-            or MO_indexes is None
-            or MO_labels is None
-        ):
-            return
-
-        if len(homo_ind) == 2:
-            wavefunction_table.add_row(['Unrestricted calculation', 'Alpha spin MO', 'Beta spin MO'])
-            wavefunction_table.add_row(['HOMO number', homo_ind[0]+1, homo_ind[1]+1])
-
-            for idx_label, _ in enumerate(MO_labels[0]):
-                idx_alpha = MO_indexes[0][idx_label]
-                idx_beta  = MO_indexes[1][idx_label]
-                label = MO_labels[0][idx_label].replace("_alpha", "")
-
-                wavefunction_table.add_row([
-                    f"{label.upper()} energies",
-                    "%.2f eV" % MO_energies[0][idx_alpha],
-                    "%.2f eV" % MO_energies[1][idx_beta]
-                ])
-        else:
-            multiplicity = computed_data.molecule.multiplicity[i_log]
-            if multiplicity is not None and multiplicity > 1:
-                # ROHF/ROKS: one set of orbitals, the HOMO is the highest singly occupied MO
-                wavefunction_table.add_row(['Restricted open-shell calculation', 'Spin MO', " "])
-                wavefunction_table.add_row(['HOMO number (highest singly occupied MO)', homo_ind[0]+1, " "])
-            else:
-                wavefunction_table.add_row(['Restricted calculation', 'Spin MO', " "])
-                wavefunction_table.add_row(['HOMO number', homo_ind[0]+1, " "])
-
-            for idx_label, label in enumerate(MO_labels[0]):
-                idx = MO_indexes[0][idx_label]
-                wavefunction_table.add_row([
-                    f"{label.upper()} energies",
-                    "%.2f eV" % MO_energies[0][idx],
-                    " "
-                ])
+    models = ", ".join(log_files[idx] for idx in log_indexes)
+    energy = "%.5f" % total_energy if total_energy is not None else ""
+    if len(homo_ind) == 2:
+        kinds = ["unrestricted, $\\alpha$", "unrestricted, $\\beta$"]
+    else:
+        multiplicity = computed_data.molecule.multiplicity[i_log]
+        # ROHF/ROKS: one set of orbitals, the HOMO is the highest singly occupied MO
+        kinds = ["restricted open-shell" if multiplicity is not None and multiplicity > 1 else "restricted"]
+    rows = []
+    for spin, kind in enumerate(kinds):
+        values = ["%.2f" % MO_energies[spin][MO_indexes[spin][k]] for k in range(len(MO_labels[spin]))]
+        rows.append([models if spin == 0 else "", NoEscape(kind), energy if spin == 0 else "",
+                     homo_ind[spin] + 1] + values)
+    return rows
 
 
 def render_energies(section, computed_data: ComputedData):
@@ -772,20 +909,33 @@ def render_energies(section, computed_data: ComputedData):
         else:
             other_groups.append(group)
 
-    # First display energies table for the group with the refrence if it exists
-    if ref_group is not None:
-        render_energies_table(section, computed_data, ref_group)
-        isContentAdded = True
-
-    # Than display the other energies tables if they exists
-    for group in other_groups:
-        
-        render_energies_table(section, computed_data, group)
-        
-        if (isContentAdded == False):
-            isContentAdded = True
-            
-    return isContentAdded
+    # One table for all the models: the six tables of the acetone test series (one per group
+    # of models) repeated the same rows; the group of the reference comes first.
+    ordered = ([ref_group] if ref_group is not None else []) + other_groups
+    if not ordered:
+        return False
+    labels = [label.replace("_alpha", "").upper()
+              for label in computed_data.derived.wavefunction.MO_analysis.MO_labels[ordered[0][0]][0]]
+    n = len(labels)
+    open_shell = any(len(computed_data.results.wavefunction.homo_indexes[g[0]]) == 2 for g in ordered)
+    # tabular, not longtable: the header was left alone at the bottom of a page
+    section.append(NoEscape(r'\begin{footnotesize}'))
+    with section.create(Tabular(RAGGED + "{0.2\\textwidth} " + RAGGED + "{0.13\\textwidth} r r" + " r" * n)) as table:
+        table.add_row([MultiColumn(4 + n, align='l',
+                                   data="Table. Total energy (hartrees) and orbital energies (eV)"
+                                        + (" (one row per spin for the unrestricted calculations)"
+                                           if open_shell else ""))])
+        table.add_hline()
+        table.add_row(["Models", "Calculation", "Energy", "HOMO no."] + labels)
+        table.add_hline()
+        for group in ordered:
+            rows = energies_rows(computed_data, group)
+            for row in rows:
+                # groups computed with other orbital lists (should not happen) are padded
+                table.add_row((row + [""] * n)[:4 + n])
+        table.add_hline()
+    section.append(NoEscape(r'\end{footnotesize}'))
+    return True
 
 
 def render_ref_MO_diagram(section, output_dir, computed_data: ComputedData, report_type):
@@ -823,51 +973,80 @@ def render_ref_MO_diagram(section, output_dir, computed_data: ComputedData, repo
     ):
         return False
     
-    # For unrestricted calculation (alpha and beta spin electrons) display asked orbitals (one by each spin) and use two cameras for each
+    # All the requested orbitals in one grid of two pictures per row (figure_grid), instead of
+    # one figure per orbital
+    cells = []
+    # Unrestricted calculation: alpha and beta orbitals of each label side by side
     if len(homo_ind) == 2:
-        labels_alpha = MO_labels[0]
-        labels_beta = MO_labels[1]
-        
-        for i in range(len(labels_alpha)):
-            
-            label_alpha = labels_alpha[i]
-            label_beta = labels_beta[i]
-
+        for label_alpha, label_beta in zip(MO_labels[0], MO_labels[1]):
             nomPng_alpha = f"img-log{ref_id + 1}-MO-{label_alpha}.png"
             nomPng_beta  = f"img-log{ref_id + 1}-MO-{label_beta}.png"
-
-            path_alpha = os.path.join(output_dir, nomPng_alpha)
-            path_beta = os.path.join(output_dir, nomPng_beta)
-
-            base_label = label_alpha.replace("_alpha","")
-            if os.path.isfile(path_alpha) and os.path.isfile(path_beta):
-                caption = f"Representation of the MO {base_label.upper()} for spin α (left) and spin β (right)."
-                figure_two_col(section, nomPng_alpha, nomPng_beta, caption=caption)
-            elif os.path.isfile(path_alpha):
-                caption = f"Representation of the MO {base_label.upper()} for spin α."
-                figure_one_col(section, nomPng_alpha, caption=caption)
-            elif os.path.isfile(path_beta):
-                caption = f"Representation of the MO {base_label.upper()} for spin β."
-                figure_one_col(section, nomPng_beta, caption=caption)
-    
-    # For restricted calculation display asked orbitals and use two cameras for each
+            base_label = label_alpha.replace("_alpha", "").upper()
+            pngs = [nomPng_alpha, nomPng_beta]
+            present = [os.path.isfile(os.path.join(output_dir, png)) for png in pngs]
+            if all(present):
+                cells.append((pngs, escape_latex(base_label)))
+            elif present[0]:
+                cells.append(([nomPng_alpha], escape_latex(base_label) + r" ($\alpha$)"))
+            elif present[1]:
+                cells.append(([nomPng_beta], escape_latex(base_label) + r" ($\beta$)"))
+    # Restricted calculation: one picture per orbital, or two views
     else:
-        labels = MO_labels[0]
-        for label in labels:
+        for label in MO_labels[0]:
             nomPng = f"img-log{ref_id + 1}-MO-{label}.png"
             nomPng2 = f"img-log{ref_id + 1}-MO-{label}_cam2.png"
-            
-            path1 = os.path.join(output_dir, nomPng)
-            path2 = os.path.join(output_dir, nomPng2)
-            
-            if os.path.isfile(path1) and os.path.isfile(path2):
-                caption = f"Representation of the MO {label.upper()} from two points of view."
-                figure_two_col(section, nomPng, nomPng2, caption=caption)
-            elif os.path.isfile(path1):  # fallback si cam2 manquant
-                caption = f"Representation of the MO {label.upper()}."
-                figure_one_col(section, nomPng, caption=caption)
-    
+            if os.path.isfile(os.path.join(output_dir, nomPng)):
+                pngs = [nomPng] + ([nomPng2] if os.path.isfile(os.path.join(output_dir, nomPng2)) else [])
+                cells.append((pngs, escape_latex(label.upper())))
+    if not cells:
+        return False
+    two = any(len(pngs) == 2 for pngs, _ in cells)
+    if len(homo_ind) == 2:
+        views = r" ($\alpha$ left, $\beta$ right)" if two else ""
+    else:
+        views = " (two points of view)" if two else ""
+    # Two orbitals per row also with two pictures per orbital (alpha/beta or two views): one
+    # orbital per row put 4 orbitals on 2-3 pages (O2, HCFClBr with camera_views: 2, 26/11/2026)
+    figure_grid(section, cells, 2, max_width=None if two else 0.4, escapeCaption=False, caption=
+                f"Molecular orbitals of the reference{views}. "
+                f"{escape_latex(color_of('MO', 'positive', True))} and {escape_latex(color_of('MO', 'negative'))} "
+                f"show opposite orbital phases.{degenerate_note(computed_data, ref_id)} "
+                f"(Source: {escape_latex(computed_data.metadata.log_files[ref_id])})")
     return True
+
+
+def degenerate_note(computed_data: ComputedData, ref_id):
+    """Sentence naming the shown orbitals that are degenerate (compute.degenerate_partners) and
+    how their pairs are drawn (compute.show_degenerate_pairs); empty when there is none."""
+    from quchemreport.data_enrichment.compute import degenerate_partners
+    energies = computed_data.results.wavefunction.MO_energies[ref_id]
+    homo_ind = computed_data.results.wavefunction.homo_indexes[ref_id]
+    indexes = computed_data.derived.wavefunction.MO_analysis.MO_indexes[ref_id]
+    if not energies or not indexes or not homo_ind:
+        return ""
+    groups = []
+    for spin, idx_list in enumerate(indexes):
+        for i in idx_list:
+            partners = degenerate_partners(energies[spin], i)
+            if not partners:
+                continue
+            group = sorted([i] + partners)
+            names = "/".join(_orbital_name(k, homo_ind[spin]) for k in group)
+            names += {0: r" ($\alpha$)", 1: r" ($\beta$)"}[spin] if len(indexes) == 2 else ""
+            if names not in groups:
+                groups.append(names)
+    if not groups:
+        return ""
+    return (" Degenerate orbitals: " + ", ".join(groups) + ". Any combination of degenerate orbitals "
+            "is as valid: the pictures of a degenerate pair show the two combinations seen alike from "
+            "this point of view.")
+
+
+def _orbital_name(index, homo):
+    """HOMO, HOMO-1, LUMO, LUMO+2... of the 0-based orbital index."""
+    if index <= homo:
+        return "HOMO" if index == homo else f"HOMO-{homo - index}"
+    return "LUMO" if index == homo + 1 else f"LUMO+{index - homo - 1}"
 
 
 def render_ref_MEP_maps(section, output_dir, computed_data: ComputedData, report_type):
@@ -910,13 +1089,25 @@ def render_ref_MEP_maps(section, output_dir, computed_data: ComputedData, report
                     f"+{color_range * Eh_to_Kcal_mol:.0f} kcal/mol ({-color_range:g} to +{color_range:g} a.u.), "
                     "the same for the compounds of the same charge")
     caption += ". "
+    weakest = f"{mep_surface.PROMINENCE_MIN * Eh_to_Kcal_mol:.1f} kcal/mol"
     if extrema:
         caption += ("Numbered spheres: local minima (white) and maxima (black) of the MEP on this surface "
-                    "(see the table below; those on the hidden side are not visible).")
+                    f"(see the table below; extrema standing out by less than {weakest} from their "
+                    "surroundings are not shown; the numbers on the hidden side are not written).")
+    elif maps.surface_extrema is not None:
+        caption += f"No local extremum of the MEP standing out by more than {weakest} on this surface."
+    nomPng2 = f"img-log{ref_id + 1}-MEP_cam2.png"
+    two = os.path.isfile(output_dir + nomPng2)
+    if two:
+        caption += " Two points of view."
     if os.path.isfile(output_dir + nomPng):
         section.append(NoEscape(r'\begin{figure}[H]'))
         section.append(NoEscape(r'\begin{center}'))
-        section.append(NoEscape(r'\includegraphics[width=10cm]{' + nomPng + '}'))
+        if two:
+            section.append(NoEscape(r'\includegraphics[width=8.5cm]{' + nomPng + r'}\hspace{2mm}'
+                                    r'\includegraphics[width=8.5cm]{' + nomPng2 + '}'))
+        else:
+            section.append(NoEscape(r'\includegraphics[width=10cm]{' + nomPng + '}'))
         if os.path.isfile(output_dir + nomBar):
             section.append(NoEscape(r'\\'))
             section.append(NoEscape(r'\includegraphics[width=9cm]{' + nomBar + '}'))
@@ -967,9 +1158,14 @@ def render_MEP_extrema_table(section, computed_data: ComputedData, isovalue, ext
             au = f"{ext['value']:+.4f}"
             if ext is first[ext["kind"]]:
                 kcal, au = bold(kcal), bold(au)
-            table.add_row([str(number), "minimum" if ext["kind"] == "min" else "maximum", kcal, au,
+            kind = ("minimum" if ext["kind"] == "min" else "maximum") + (" (ring)" if ext.get("ring") else "")
+            table.add_row([str(number), kind, kcal, au,
                            atom, f"{ext['distance'] * a0_to_A:.2f}"])
         table.add_hline()
+        if any(ext.get("ring") for ext in extrema):
+            table.add_row([MultiColumn(6, align='l', data=NoEscape(
+                r"\footnotesize Ring: the same value all around the axis of the linear molecule "
+                r"(marker at the top of the picture)."))])
 
 
 def render_ref_population_analysis(section, computed_data: ComputedData, report_type):
@@ -1019,8 +1215,8 @@ def render_ref_population_analysis(section, computed_data: ComputedData, report_
         for method, (mean, std) in stats.items():
             stats_table.add_row([
                 f"Mean {method} atomic charge and standard deviation",
-                f"{mean:.4f} e-",
-                f"{std:.4f} e-"
+                f"{fmt_signed(mean, 4)} e",
+                f"{std:.4f} e"
             ])
 
     # Display atoms with significant charges (exceeding ±1σ in at least one method)
@@ -1258,49 +1454,48 @@ def render_IR_spectrum(section, computed_data: ComputedData):
             vibrational_sym = np.array(["N/A" for _ in range(len(vibrational_int))])
             
         log_file = log_files[i]
-        k = 0
-        
-        # filtering & orderering
-        if len(vibrational_int) == 0 :
-            vibrational_int = []
-        else :  
-            vib_filter = vibrational_int > THRESHOLD_IR_INTENSITIES
-            vib_order = np.argsort(vibrational_freq[vib_filter])[::-1]
-            vibrational_int = vibrational_int[vib_filter][vib_order]
-            vibrational_freq = vibrational_freq[vib_filter][vib_order]
-            vibrational_sym = vibrational_sym[vib_filter][vib_order]
-            
-        # Skip if no data to display
-        if (
-            len(vibrational_freq) == 0 or
-            len(vibrational_int) == 0 or
-            len(vibrational_sym) != len(vibrational_freq)
-        ):
+        if len(vibrational_freq) == 0 or len(vibrational_int) != len(vibrational_freq):
             continue
-        
-        if (isContentAdded == False):
-            isContentAdded = True
-            
+        isContentAdded = True
+        all_freq, all_int = vibrational_freq, vibrational_int
+        vib_filter = vibrational_int > THRESHOLD_IR_INTENSITIES
+        vib_order = np.argsort(vibrational_freq[vib_filter])[::-1]
+        vibrational_int = vibrational_int[vib_filter][vib_order]
+        vibrational_freq = vibrational_freq[vib_filter][vib_order]
+        vibrational_sym = vibrational_sym[vib_filter][vib_order] if len(vibrational_sym) == len(all_freq) else []
+
+        if len(vibrational_freq) == 0:
+            # No intense vibration: say so instead of leaving the section silent (O2, 26/11/2026:
+            # IR-inactive, the report showed nothing at all)
+            freqs = ", ".join("%d" % f for f in sorted(all_freq, reverse=True)[:6])
+            if np.max(all_int) < IR_INACTIVE:
+                text = (f"No IR-active vibration (all intensities below {IR_INACTIVE} km/mol). "
+                        f"Vibrations: {freqs}{', ...' if len(all_freq) > 6 else ''} cm$^{{-1}}$.")
+            else:
+                k = int(np.argmax(all_int))
+                text = (f"No vibration more intense than {THRESHOLD_IR_INTENSITIES:.0f} km/mol; the most intense: "
+                        f"{all_freq[k]:.0f} cm$^{{-1}}$ ({all_int[k]:.1f} km/mol).")
+            section.append(NoEscape(text + f" (Source: {escape_latex(log_file)})"))
+            continue
+
+        # The symmetry column only when the program gives it (ORCA: none)
+        has_sym = any(str(x) not in ("N/A", "", "None") for x in vibrational_sym)
         section.append(NoEscape(r'\begin{center}'))
-        with section.create(Tabular('rrrc')) as ir_spectrum_table :
-            row_cells = [MultiColumn(4, align='c', 
-                                        data="Table. Most intense (> 50 km/mol) molecular vibrations in wavenumbers")]
-            ir_spectrum_table.add_row(row_cells)
-            ir_spectrum_table.add_row(
-                [MultiColumn(4, align='l', 
-                data=f"Source: {log_file}")]
-            )
+        with section.create(Tabular('rr' + ('c' if has_sym else ''))) as ir_spectrum_table:
+            ncol = 3 if has_sym else 2
+            ir_spectrum_table.add_row([MultiColumn(ncol, align='c', data=NoEscape(
+                f"Table. Most intense (> {THRESHOLD_IR_INTENSITIES:.0f} km/mol) vibrations."))])
+            ir_spectrum_table.add_row([MultiColumn(ncol, align='c', data=f"Source: {log_file}")])
             ir_spectrum_table.add_hline()
-            ir_spectrum_table.add_row(["", "Frequencies", "Intensity", "Symmetry"])
+            ir_spectrum_table.add_row([NoEscape(r"Wavenumber (cm$^{-1}$)"), "Intensity (km/mol)"]
+                                      + (["Symmetry"] if has_sym else []))
             ir_spectrum_table.add_hline()
-            for k in range(len(vibrational_freq)) :
-                ir_spectrum_table.add_row(["",
-                                "%d" % vibrational_freq[k],
-                                "%d" % vibrational_int[k], 
-                                vibrational_sym[k]])
+            for k in range(len(vibrational_freq)):
+                ir_spectrum_table.add_row(["%d" % vibrational_freq[k], "%d" % vibrational_int[k]]
+                                          + ([vibrational_sym[k]] if has_sym else []))
             ir_spectrum_table.add_hline()
         section.append(NoEscape(r'\end{center}'))
-    
+
     return isContentAdded
 
 
@@ -1356,81 +1551,78 @@ def render_CDFT_global_indices(section, computed_data: ComputedData, report_type
     ):
         return False
     
-    with section.create(LongTable("p{0.6\\textwidth} p{0.2\\textwidth} p{0.2\\textwidth}")) as CDFT_indicies_table :
-        CDFT_indicies_table.add_row([" ", " " , " "])
-        if A != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Electron Affinity', "%.3f eV" % A , ""  ] )
-            
-        if I != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Ionisation Potential', "%.3f eV" % I , ""  ] )
-        
-        if Khi != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Electronegativity', "%.3f eV" % Khi , ""  ] )
-        
-        if Eta != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Hardness', "%.3f eV" % Eta , ""  ] )
-    
-        if Omega != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Electrophilicity', "%.3f eV" % Omega , ""  ] )
-        
-        if DeltaN != None:
-            CDFT_indicies_table.add_row(['CDFT indices: Electron-flow', "%.4f e-" % DeltaN, ""  ] )
-    
+    # One titled table: "CDFT indices:" was repeated in front of every row
+    rows = [("Electron affinity (A)", A, "%.3f eV"), ("Ionization potential (I)", I, "%.3f eV"),
+            ("Electronegativity ($\\chi$)", Khi, "%.3f eV"), ("Hardness ($\\eta$)", Eta, "%.3f eV"),
+            ("Electrophilicity ($\\omega$)", Omega, "%.3f eV"),
+            ("Electron flow ($\\Delta N$)", DeltaN, "%.4f e")]
+    section.append(NoEscape(r'\begin{center}'))
+    with section.create(Tabular("l r")) as CDFT_indicies_table:
+        CDFT_indicies_table.add_row([MultiColumn(2, align='c', data="Table. Conceptual DFT global indices.")])
+        CDFT_indicies_table.add_hline()
+        for label, value, form in rows:
+            if value is not None:
+                CDFT_indicies_table.add_row([NoEscape(label), form % value])
+        CDFT_indicies_table.add_hline()
+    section.append(NoEscape(r'\end{center}'))
     return True
+
+
+# Molecules up to this number of atoms list every atom in the condensed Fukui table; larger
+# ones only the atoms whose dual descriptor is more than one standard deviation from the mean.
+# Why (26/11/2026): the outlier rule alone gave an empty table for symmetric molecules (O2: both
+# atoms equal) and was not explained in the caption.
+FUKUI_ALL_ATOMS = 20
+
+
+def fukui_table_atoms(n_atoms, fplus, fminus, fdual):
+    """Atom indexes of the condensed Fukui table and whether all the atoms are listed.
+
+    Sorted by dual descriptor when there is one. Every atom up to FUKUI_ALL_ATOMS atoms (or when
+    no atom stands out), otherwise the atoms whose dual descriptor departs from the mean by more
+    than one standard deviation."""
+    has_value = [i for i in range(n_atoms)
+                 if (i < len(fplus) and fplus[i] is not None) or (i < len(fminus) and fminus[i] is not None)
+                 or (i < len(fdual) and fdual[i] is not None)]
+    if len(fdual) == 0:
+        return has_value, True
+    fd = np.array([np.nan if v is None else v for v in fdual], dtype=float)
+    order = [i for i in np.argsort(fd) if i in has_value]
+    if n_atoms <= FUKUI_ALL_ATOMS:
+        return order, True
+    mean, dev = np.nanmean(fd), np.nanstd(fd)
+    picked = [i for i in order if abs(fd[i] - mean) > dev]
+    return (picked, False) if picked else (order, True)
 
 
 def render_fukui_table(doc, atoms_Z, fplus, fminus, fdual, title):
     """Table of condensed Fukui functions (f+, f-, dual descriptor) per atom, for one charge
-    model (Mulliken or Hirshfeld).
+    model (Mulliken or Hirshfeld); atoms chosen by fukui_table_atoms.
     """
-    has_data = len(fplus) > 0 or len(fminus) > 0
-    if not has_data:
+    if len(fplus) == 0 and len(fminus) == 0:
         return
-
-    n_atoms = len(atoms_Z)
-    has_dual = len(fdual) > 0
-    ind = list(range(n_atoms))
-
-    if has_dual:
-        fdual = np.array(fdual)
-        mean_fd = np.mean(fdual)
-        dev_fd = np.std(fdual)
-        thres_max = mean_fd + dev_fd
-        thres_min = mean_fd - dev_fd
-        ind = np.argsort(fdual)
+    ind, all_atoms = fukui_table_atoms(len(atoms_Z), fplus, fminus, fdual)
+    if not ind:
+        return
+    which = "" if all_atoms else (" Atoms whose dual descriptor departs from the mean by more than"
+                                  " one standard deviation.")
 
     doc.append(NoEscape(r'\begin{center}'))
-    with doc.create(Tabular('p{0cm}rrrrp{0cm}')) as fukui_table:
-        row_cells = [MultiColumn(6, align='c', data=f"Table. Condensed Fukui functions based on {title} charges.")]
+    # No empty p{0cm} side columns: their width made the header cells overlap
+    with doc.create(Tabular('lrrr')) as fukui_table:
+        row_cells = [MultiColumn(4, align='c', data=f"Table. Condensed Fukui functions based on {title} charges.")]
         fukui_table.add_row(row_cells)
         fukui_table.add_hline()
-        fukui_table.add_row(["", "Atom", "atomic dual descriptor (f+ - f-)", "atomic electrophilicity f+", "atomic nucleophilicity f-", ""])
+        fukui_table.add_row(["Atom", NoEscape(r"Dual descriptor $f^+ - f^-$"),
+                             NoEscape(r"Electrophilicity $f^+$"), NoEscape(r"Nucleophilicity $f^-$")])
         fukui_table.add_hline()
-
         for i in ind:
-            fplus_val = fplus[i] if i < len(fplus) else None
-            fminus_val = fminus[i] if i < len(fminus) else None
-            fdual_val = fdual[i] if has_dual and i < len(fdual) else None
-            
-            # Skip unwanted values
-            if has_dual:
-                if fdual_val is None or (thres_min <= fdual_val <= thres_max):
-                    continue
-            else:
-                if fplus_val is None and fminus_val is None:
-                    continue
-
-            atom_label = "%s %d" % (PeriodicTable().element[atoms_Z[i]], i + 1)
-            fukui_table.add_row([
-                "",
-                atom_label,
-                "  %.2f" % fdual_val if fdual_val is not None else "",
-                "  %.2f" % fplus_val if fplus_val is not None else "",
-                "  %.2f" % fminus_val if fminus_val is not None else "",
-                ""
-            ])
-
+            values = [v[i] if i < len(v) else None for v in (fdual, fplus, fminus)]
+            atom_label = "%s%d" % (PeriodicTable().element[atoms_Z[i]], i + 1)
+            fukui_table.add_row([atom_label] + [fmt_signed(v, 2) if v is not None else "" for v in values])
         fukui_table.add_hline()
+        if which:
+            fukui_table.add_row([MultiColumn(4, align='c', data=NoEscape(r"\footnotesize" + which))])
     doc.append(NoEscape(r'\end{center}'))
 
 
@@ -1517,8 +1709,8 @@ def render_fukui_functions(section, output_dir, computed_data: ComputedData, rep
     plus, plus2 = "img-fukui-SP_plus.png", "img-fukui-SP_plus_cam2.png"
     minus, minus2 = "img-fukui-SP_minus.png", "img-fukui-SP_minus_cam2.png"
     has = lambda name: os.path.isfile(output_dir + name)
-    caption_plus = "the F+ function; blue regions are the most electrophilic."
-    caption_minus = "the F- function; blue regions are the most nucleophilic."
+    caption_plus = f"the F+ function; {color_of('fukui', 'positive')} regions are the most electrophilic."
+    caption_minus = f"the F- function; {color_of('fukui', 'positive')} regions are the most nucleophilic."
     if has(plus) and has(minus) and not (has(plus2) or has(minus2)):
         figure_two_col(section, plus, minus,
                        caption="Representation of the electrophilic (left) and nucleophilic (right) Fukui functions.")
@@ -1534,12 +1726,14 @@ def render_fukui_functions(section, output_dir, computed_data: ComputedData, rep
             isContentAdded = True
     
     nomPng = "img-Fdual.png"
-    nomPng2 = "img-Fdual_cam2.png"                                                        
+    nomPng2 = "img-Fdual_cam2.png"
+    regions = (f"Electrophilic and nucleophilic regions correspond to {color_of('fukui', 'positive')} "
+               f"and {color_of('fukui', 'negative')} surfaces.")
     if (os.path.isfile(output_dir + nomPng)) :
         if (os.path.isfile(output_dir + nomPng2)) :
-            figure_two_col(section, nomPng, nomPng2, caption="Representation of the Dual descriptor from two points of view. Electrophilic and nucleophilic regions correspond to blue and white surfaces.")
+            figure_two_col(section, nomPng, nomPng2, caption="Representation of the Dual descriptor from two points of view. " + regions)
         else :
-            figure_one_col(section, nomPng, caption="Representation of the Dual descriptor from one point of view. Electrophilic and nucleophilic regions correspond to blue and white surfaces.")
+            figure_one_col(section, nomPng, caption="Representation of the Dual descriptor from one point of view. " + regions)
         isContentAdded = True
     
     return isContentAdded
@@ -1573,25 +1767,57 @@ def fill_reactivity_section(doc, output_dir, computed_data: ComputedData, report
         doc.append(section)
 
 
+def fmt_signed(x, digits):
+    """x with the given decimals, without the "-0.0000" of tiny negative values."""
+    text = f"{x:.{digits}f}"
+    return text.lstrip("-") if float(text) == 0 else text
+
+
+def frontier_label(mo, homo):
+    """'H', 'H-1', 'L', 'L+2'... of the 0-based orbital mo, homo being the 0-based HOMO."""
+    if mo <= homo:
+        return "H" if mo == homo else f"H-{homo - mo}"
+    return "L" if mo == homo + 1 else f"L+{mo - homo - 1}"
+
+
 def build_CIS_string(transitions, homo_ind, filter_threshold=5):
-    """Main excitations of a state as text, e.g. ``8->9 (95)``: orbital numbers (1-based,
-    with a/b for unrestricted calculations) and weight in % (C^2 x 100), for the weights of
-    at least filter_threshold %.
+    """Main excitations of a state as LaTeX, e.g. ``H$\to$L (95)``: orbitals named from the
+    HOMO (H) and LUMO (L) of their spin, alpha/beta for unrestricted calculations, and weight
+    in % (C^2 x 100), for the weights of at least filter_threshold %.
+
+    The orbital numbers (16->17) of the former tables had to be compared with the HOMO
+    number of the wavefunction section; the orbital number is kept in the table caption.
     """
-    CIS = ""
+    parts = []
+    unrestricted = len(homo_ind) == 2
     for ST in transitions:
         coeff = int(ST[2] ** 2 * 100)
         if coeff >= filter_threshold:
             mo_i, spin_i = ST[0]
             mo_f, spin_f = ST[1]
-            if len(homo_ind) == 2:  # Unrestricted
-                spin_map = {0: "a", 1: "b"}
-                spin_i_str = spin_map.get(spin_i, "")
-                spin_f_str = spin_map.get(spin_f, "")
-                CIS += f"{mo_i+1}{spin_i_str}-{mo_f+1}{spin_f_str} ({coeff}) "
-            else:  # Restricted
-                CIS += f"{mo_i+1}->{mo_f+1} ({coeff}) "
-    return CIS.strip()
+            spin = {0: r"$\alpha$", 1: r"$\beta$"} if unrestricted else {0: "", 1: ""}
+            homo_i = homo_ind[spin_i] if unrestricted else homo_ind[0]
+            homo_f = homo_ind[spin_f] if unrestricted else homo_ind[0]
+            parts.append(f"{frontier_label(mo_i, homo_i)}{spin.get(spin_i, '')}$\\to$"
+                         f"{frontier_label(mo_f, homo_f)}{spin.get(spin_f, '')} ({coeff})")
+    return NoEscape(", ".join(parts))
+
+
+# Spin contamination: <S^2> of an excited state of an open-shell reference farther than this
+# from S(S+1) is shown in bold (0.1, the usual warning level for UKS ground states).
+S2_CONTAMINATION = 0.1
+MULTIPLICITY_WORDS = {2: "doublet", 3: "triplet", 4: "quartet", 5: "quintet"}
+_GREEK = {"sigma": r"\Sigma", "pi": r"\Pi", "delta": r"\Delta", "phi": r"\Phi"}
+
+
+def fmt_spatial_symmetry(sym):
+    """Spatial symmetry of a state for LaTeX: 'sigma.u' (cclib, linear molecules) -> Sigma_u,
+    other labels (A1, B2...) unchanged."""
+    if "." in sym:
+        name, rest = sym.split(".", 1)
+        if name.lower() in _GREEK:
+            return NoEscape(f"${_GREEK[name.lower()]}_{{{escape_latex(rest)}}}$")
+    return escape_latex(sym)
 
 
 def render_excited_state_transitions_table(doc, computed_data: ComputedData, log_idx, is_optimized=False, indices=None, report_type="full", title=""):
@@ -1650,34 +1876,47 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
         return False
     
     if is_optimized:
-        title = "Table. Results concerning the calculated mono-electronic optimization excitation."
+        title = "Table. Excited state at its optimized geometry (vertical emission)."
     else:
-        title = "Table. Results concerning the calculated mono-electronic excitations."
+        title = "Table. Vertical excitations from the ground state."
 
     et_nm = [nm_to_wnb / e if e else 0 for e in et_energies]
 
+    if indices is None:
+        indices = range(len(et_transitions))
+    indices = list(indices)
+    # Spatial symmetry only (A, B2...): the spin is in the S/T label; ORCA gives none, and
+    # the column is then left out
+    spatial = [str(sym).split("-", 1)[1] if "-" in str(sym) else "" for sym in et_sym]
+    has_sym = any(spatial[idx] for idx in indices)
+    # Rank of the state in the log (the excited_state_number of the YAML file) when it differs
+    # from the number within the multiplicity (TD with singlets and triplets): own column
+    # instead of the former "S1 (2)" next to a plain "T1"
+    mixed = any(state_number(et_sym, idx) != idx + 1 for idx in indices)
+
     doc.append(NoEscape(r'\begin{center}'))
     
-    ncols = (10 if use_full else 7) - (0 if has_rot else 1)
-    r_header = ["R"] if has_rot else []
+    # <S^2> of the states of an open-shell reference (scanlog._unrestricted_states)
+    et_s2 = computed_data.results.excited_states.et_s2[log_idx]
+    has_s2 = et_s2 is not None and len(et_s2) == len(et_energies)
+    if has_s2:
+        mult = computed_data.molecule.multiplicity[log_idx] or 1
+        s2_pure = (mult - 1) / 2 * ((mult - 1) / 2 + 1)
+    header = (["No."] if mixed else []) + ["State"] + (["Sym."] if has_sym else []) \
+        + ["nm", NoEscape(r"cm$^{-1}$"), italic("f")] + (["R"] if has_rot else []) \
+        + ([NoEscape(r"$\langle S^2\rangle$")] if has_s2 else [])
+    if use_full:
+        header += [NoEscape(r"$\Lambda$"), NoEscape(r"d$_{CT}$ (pm)"), NoEscape(r"q$_{CT}$ (e)")]
+    header += [NoEscape(r"Main excitations (\%)")]
+    ncols = len(header)
 
-    table_format = 'r' * (ncols - 1) + 'p{6cm}'
+    table_format = 'r' * (ncols - 1) + RAGGED + '{5.5cm}'
     with doc.create(Tabular(table_format)) as es_transitions_table:
         es_transitions_table.add_row([MultiColumn(ncols, align='c', data=title)])
         es_transitions_table.add_row([MultiColumn(ncols, align='c', data=f"Source: {log_files}")])
         es_transitions_table.add_hline()
-        if use_full:
-            es_transitions_table.add_row(["E.S.", "Symmetry", "nm", NoEscape(r"cm$^{-1}$"),
-                            italic("f"), *r_header, NoEscape(r"$\Lambda$"),
-                            NoEscape(r"d$_{CT}$"), NoEscape(r"q$_{CT}$"),
-                            "Excitation description in %"])
-        else:
-            es_transitions_table.add_row(["E.S.", "Symmetry", "nm", NoEscape(r"cm$^{-1}$"),
-                            italic("f"), *r_header, "Excitation description in %"])
+        es_transitions_table.add_row(header)
         es_transitions_table.add_hline()
-
-        if indices is None:
-            indices = range(len(et_transitions))
 
         for idx in indices:
             
@@ -1685,7 +1924,8 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
             nm_val = et_nm[idx] if et_nm[idx] is not None else 0
             osc = et_oscs[idx]
             if has_rot:
-                rot_val = et_rot[idx] if et_rot[idx] is not None else "N/A"
+                # 4 decimals for every program (Gaussian printed 0.0 and -0.0001, ORCA 0.02572)
+                rot_val = fmt_signed(et_rot[idx], 4) if et_rot[idx] is not None else "N/A"
 
             if use_full:
                 lambda_val = Tozer_lambda[idx]
@@ -1704,19 +1944,18 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
             trans = et_transitions[idx]
             CIS = build_CIS_string(trans, homo_ind, filter_threshold=0 if is_optimized else 5)
 
-            # S<n>/T<n> within the multiplicity (as the images), with the number of the log
-            # when it differs (TD with singlets and triplets)
-            number = state_number(et_sym, idx)
-            es_label = f"{spin_letter(et_sym[idx])}{number}" + (f" ({idx + 1})" if number != idx + 1 else "")
-            row = [
-                es_label,
-                et_sym[idx],
+            # S<n>/T<n> within the multiplicity (as the images)
+            row = ([f"{idx + 1}"] if mixed else []) + [state_label(et_sym, idx)] \
+                + ([fmt_spatial_symmetry(spatial[idx])] if has_sym else []) + [
                 f"{int(nm_val)}",
                 f"{int(energy)}",
                 f"{osc:.3f}",
             ]
             if has_rot:
                 row.append(f"{rot_val}")
+            if has_s2:
+                s2 = f"{et_s2[idx]:.3f}"
+                row.append(bold(s2) if abs(et_s2[idx] - s2_pure) > S2_CONTAMINATION else s2)
 
             if use_full:
                 row += [
@@ -1729,6 +1968,21 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
             es_transitions_table.add_row(row)
 
         es_transitions_table.add_hline()
+        homo = homo_ind[0] + 1 if len(homo_ind) == 1 else f"{homo_ind[0] + 1}/{homo_ind[1] + 1}"
+        note = (f"H: HOMO (orbital {homo}"
+                + (r" for $\alpha$/$\beta$" if len(homo_ind) == 2 else "") + "), L: LUMO. ")
+        if mixed:
+            note += "No.: rank of the state in the log file. "
+        if has_rot:
+            note += r"\textit{f}: oscillator strength; R: rotatory strength. "
+        if has_s2:
+            note += (r"$\langle S^2\rangle$: " + f"{s2_pure:.2f} for a pure {MULTIPLICITY_WORDS.get(mult, 'spin')} state; "
+                     f"in bold, more than {S2_CONTAMINATION} away (spin contamination). ")
+        if use_full:
+            note += (r"$\Lambda$: hole-electron overlap (0 to 1, small for charge transfer); "
+                     r"d$_{CT}$, q$_{CT}$: charge-transfer distance and charge.")
+        es_transitions_table.add_row([MultiColumn(ncols, align=NoEscape(RAGGED + '{0.95\\textwidth}'),
+                                                  data=NoEscape(r"\footnotesize " + note))])
 
     doc.append(NoEscape(r'\end{center}'))
     
@@ -1806,7 +2060,7 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
         imgNameAbso = f"img-log{log_idx + 1}-UV-Abso-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameAbso)) :
             figure_one_col(section, imgNameAbso, taillePng="10cm", 
-                caption=f"Calculated UV visible Absorption spectrum with a gaussian broadening (FWHM = 3000 cm-1). (Source: {log_file})"
+                caption=f"Calculated UV-visible absorption spectrum with a Gaussian broadening (FWHM = 3000 cm-1). (Source: {log_file})"
             )
             content_added = True
             
@@ -1815,7 +2069,7 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
         imgNameCD= f"img-log{log_idx + 1}-UV-CD-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameCD)) :
             figure_one_col(section, imgNameCD, taillePng="10cm", 
-                caption=f"Calculated Circular Dichroism spectrum with a gaussian broadening (FWHM = 3000 cm-1. (Source: {log_file})"
+                caption=f"Calculated circular dichroism spectrum with a Gaussian broadening (FWHM = 3000 cm-1). (Source: {log_file})"
             )
             content_added = True
             
@@ -1867,6 +2121,7 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
         ):
             continue
         
+        cells = []
         for k in range(len(et_transitions)):
             # viz_EDD names the files EDD-S<n> (singlet), EDD-T<n> (triplet), EDD-<n> (other states,
             # e.g. unrestricted), see utility_services.naming
@@ -1876,29 +2131,23 @@ def render_es_EDD(section, output_dir, computed_data: ComputedData, report_type)
             state = f"{letter}{number}" if letter else f"state {number}"
             nomPng = f"img-log{log_idx + 1}-EDD-{letter}{number}.png"
             nomPng_cam2 = f"img-log{log_idx + 1}-EDD-{letter}{number}_cam2.png"
-            
-            if (os.path.isfile(output_dir + nomPng)) :
-                if (os.path.isfile(output_dir + nomPng_cam2)) :
-                    figure_two_col(section, nomPng, nomPng_cam2, caption=f"Representation of the Electron Density Difference ({state}) from two points of view. (Source: {log_file})")
-                else:
-                    figure_one_col(section, nomPng, caption=f"Representation of the Electron Density Difference ({state}). (Source: {log_file})")
-                
-                if (isContentAdded == False):
-                    isContentAdded = True
-                
-        # TODO : TO CHECK : These images seem to never be generated
-        # nomPng = "img-EDD-1.png"
-        # nomPng_cam2 = "img-EDD-1_cam2.png"
-        # nomPng2 = "img-EDD-2.png"
-        # nomPng2_cam2 = "img-EDD-2_cam2.png"
-        # if (os.path.isfile(output_dir + nomPng)) :
-        #     if (os.path.isfile(output_dir + nomPng_cam2)) :
-        #         figure_two_col(doc, nomPng, nomPng_cam2, caption="Representation of the Electron Density Difference (ES1-GS) from two points of view.")
-        #         if (os.path.isfile(output_dir + nomPng2)) :
-        #             if (os.path.isfile(output_dir + nomPng2_cam2)) :
-        #                 figure_two_col(doc, nomPng2, nomPng2_cam2, caption="Representation of the Electron Density Difference (ES2-GS) from two points of view.")
-        #     elif (os.path.isfile(output_dir + nomPng2)) :
-        #         figure_two_col(doc, nomPng, nomPng2, caption="Representation of the Electron Density Difference (ES1-GS left) and (ES2-GS right). The excited electron and the hole regions are indicated by respectively blue and white surfaces.")
+            if os.path.isfile(output_dir + nomPng):
+                pngs = [nomPng] + ([nomPng_cam2] if os.path.isfile(output_dir + nomPng_cam2) else [])
+                cells.append((pngs, escape_latex(state)))
+        if not cells:
+            continue
+        two_views = any(len(pngs) == 2 for pngs, _ in cells)
+        # EDD = sum of c^2 (rho_end - rho_start) (calc_orb.TD): positive part (output.colors.EDD,
+        # blue by default) = electron, negative part (cream) = hole. Identical pictures for
+        # two states (acetone S1 and T1) are expected when both are the same single excitation
+        # (16->17): the surfaces enclose a share of the density, independent of c^2.
+        caption = ("Electron density difference (excited state minus ground state) of the excited states"
+                   + (", from two points of view" if two_views else "")
+                   + f". {color_of('EDD', 'positive', True)}: excited electron; "
+                   f"{color_of('EDD', 'negative')}: hole; each surface encloses 30% of the "
+                   f"density gained or lost. (Source: {log_file})")
+        figure_grid(section, cells, 2 if two_views else 3, caption)
+        isContentAdded = True
 
     return isContentAdded
 
@@ -1921,40 +2170,58 @@ def render_es_nto(section, output_dir, computed_data, report_type):
     bool
         Whether something was added to the section.
     """
+    # The method and the completeness check were repeated for every state (one paragraph per
+    # state, 11 in the acetone test series); they are now given once per TD model, with the
+    # sum of X^2 of every state on one line and one warning naming the incomplete states.
     added = False
     for log_idx, states in enumerate(computed_data.derived.excited_states.nto_pairs):
         et_sym = computed_data.results.excited_states.et_sym[log_idx]
-        for state in states or []:
-            if not state["pairs"]:
-                continue
-            added = True
+        log_file = computed_data.metadata.log_files[log_idx]
+        states = [state for state in states or [] if state["pairs"]]
+        if not states:
+            continue
+        cells, norms, incomplete, text_lines = [], [], [], []
+        for state in states:
             # S<n> / T<n> as for the EDD (utility_services.naming); <n> for other states
             label = state_label(et_sym, state["state"] - 1) if et_sym else str(state["state"])
-            name = label if label[0] in "ST" else f"state {label}"
-            section.append(f"Natural transition orbitals, {name} "
-                           f"(source: {computed_data.metadata.log_files[log_idx]}). "
-                           "Weights are normalized over the printed excitation amplitudes X; "
-                           "de-excitation amplitudes Y are excluded. Missing printed coefficients "
-                           "may affect the results. Reference canonical orbitals must match the TD calculation. ")
+            name = label if label[0].isalpha() else f"state {label}"
             if "x_norm" in state:
-                section.append(f"{state.get('n_amplitudes', '?')} excitation amplitudes read, "
-                               f"sum of X squared = {state['x_norm']:.3f} "
-                               "(about 1, or slightly above for full TD-DFT, when all amplitudes are printed). ")
+                n = state.get("n_amplitudes", "?")
+                norms.append(f"{name} {state['x_norm']:.3f} ({n} amplitude{'s' if n != 1 else ''})")
                 if not state.get("complete", True):
-                    section.append(bold("Warning: the printed excitation amplitudes are incomplete; "
-                                        "NTO weights and shapes are approximate. Rerun the excited-state "
-                                        "calculation with a lower printing threshold "
-                                        "(Gaussian: IOp(9/40=4); ORCA: TPrint in the %tddft block). "))
+                    incomplete.append(name)
+            single = len(state["pairs"]) == 1
             for pair_idx, pair in enumerate(state["pairs"], 1):
-                caption = (f"NTO {name}, pair {pair_idx}, {pair['spin']} spin, "
-                           f"weight {100 * pair['weight']:.2f}%. Hole (left), electron (right). "
-                           "Green and gold show opposite orbital phases; their absolute signs are arbitrary.")
+                spin = {"alpha": r", $\alpha$", "beta": r", $\beta$"}.get(pair["spin"], "")
+                cell = (escape_latex(f"{name}{'' if single else f', pair {pair_idx}'}") + spin
+                        + escape_latex(f": {100 * pair['weight']:.1f}%"))
                 prefix = f"img-log{log_idx + 1}-NTO-{label}-pair{pair_idx}"
                 hole, electron = prefix + "-MO-hole.png", prefix + "-MO-electron.png"
                 if report_type != "text" and os.path.isfile(output_dir + hole) and os.path.isfile(output_dir + electron):
-                    figure_two_col(section, hole, electron, caption=caption)
+                    cells.append(([hole, electron], NoEscape(cell)))
                 else:
-                    section.append(caption)
+                    text_lines.append(NoEscape(f"NTO {cell}."))
+        added = True
+        section.append(f"Natural transition orbitals (NTO) of {log_file}. The weights are normalized "
+                       "over the printed excitation amplitudes X; the de-excitation amplitudes Y are "
+                       "excluded, and the canonical orbitals of the reference must match the TD "
+                       "calculation. ")
+        if norms:
+            section.append("Sum of the squared printed amplitudes X (about 1, or slightly above for "
+                           "full TD-DFT, when all amplitudes are printed): " + "; ".join(norms) + ". ")
+        if incomplete:
+            section.append(bold(f"Warning: the printed excitation amplitudes of {', '.join(incomplete)} "
+                                "are incomplete; their NTO weights and shapes are approximate. Rerun the "
+                                "excited-state calculation with a lower printing threshold "
+                                "(Gaussian: IOp(9/40=4); ORCA: TPrint in the %tddft block). "))
+        for line in text_lines:
+            section.append(NoEscape(r'\par '))
+            section.append(line)
+        figure_grid(section, cells, 2,
+                    "Natural transition orbitals of the excited states: hole (left) and electron "
+                    f"(right) of each pair, with its weight. {color_of('NTO', 'positive', True)} and "
+                    f"{color_of('NTO', 'negative')} show opposite orbital "
+                    f"phases; their absolute signs are arbitrary. (Source: {log_file})")
     return added
 
 
@@ -2025,9 +2292,11 @@ def render_soc_couplings(section, output_dir, computed_data: ComputedData, log_i
     width = 0.16 + 0.13 * len(singlets)
     spec = "p{0.16\\textwidth}" + "p{0.13\\textwidth}" * len(singlets)
     with section.create(LongTable(spec)) as table:
-        table.add_row([MultiColumn(ncol, align=NoEscape(f'p{{{width:.2f}\\textwidth}}'), data=NoEscape(
-            r"Table. Spin-orbit coupling matrix elements $|\langle T_n|H_{SO}|S_m\rangle|$ (cm$^{-1}$), "
-            r"$\sqrt{\sum_{M_S}|\langle T_n,M_S|H_{SO}|S_m\rangle|^2}$; state energies in eV. "
+        # ragged title, and the definition of the norm moved under the table: the justified
+        # title with the formula was stretched with large spaces
+        table.add_row([MultiColumn(ncol, align=NoEscape(RAGGED + f'{{{width:.2f}\\textwidth}}'), data=NoEscape(
+            r"Table. Spin-orbit couplings $|\langle T_n|H_{SO}|S_m\rangle|$ (cm$^{-1}$) between the "
+            r"triplets (rows) and the singlets (columns), state energies (eV) in parentheses. "
             f"Source: {escape_latex(log_file)}"))])
         table.add_hline()
         table.add_row([""] + [NoEscape(f"S$_{s['number']}$ ({s['energy'] / 8065.544:.2f})") for s in singlets])
@@ -2039,12 +2308,16 @@ def render_soc_couplings(section, output_dir, computed_data: ComputedData, log_i
                 row.append("" if value is None else f"{value:.1f}")
             table.add_row(row)
         table.add_hline()
+        table.add_row([MultiColumn(ncol, align=NoEscape(RAGGED + f'{{{width:.2f}\\textwidth}}'), data=NoEscape(
+            r"\footnotesize $|\langle T_n|H_{SO}|S_m\rangle| = "
+            r"\sqrt{\sum_{M_S}|\langle T_n,M_S|H_{SO}|S_m\rangle|^2}$, over the three sublevels of the triplet."))])
     picture = f"img-log{log_idx + 1}-Jablonski.png"
     if report_type == "full" and os.path.isfile(output_dir + picture):
-        figure_one_col(section, picture, taillePng="11cm", caption=(
+        figure_one_col(section, picture, taillePng="11cm", escapeCaption=False, caption=(
             "Jablonski-Perrin diagram of the vertical singlet and triplet states at the geometry of "
-            f"{log_file}, with the spin-orbit couplings |<T|H_SO|S>| (cm-1) of the intersystem "
-            "crossings from S1 (triplets below S1 + 0.3 eV) and from T1 to S0."))
+            f"{escape_latex(log_file)}, with the spin-orbit couplings "
+            r"$|\langle T|H_{SO}|S\rangle|$ (cm$^{-1}$) of the intersystem "
+            "crossings from S$_1$ (triplets below S$_1$ + 0.3 eV) and from T$_1$ to S$_0$."))
     return True
 
 
@@ -2187,7 +2460,8 @@ def render_optimized_es_emission_spectrum(section, output_dir, computed_data: Co
             continue
         
         figure_one_col(section, imgNamePng, taillePng="10cm", 
-            caption="Calculated UV visible Emission spectrum with a gaussian broadening (FWHM = 3000 cm-1)"
+            caption=("Calculated UV-visible emission spectrum with a Gaussian broadening (FWHM = 3000 cm-1). "
+                     f"(Source: {log_files[log_idx]})")
         )
         
         if (isContentAdded == False):
@@ -2232,7 +2506,7 @@ def render_optimized_es_CPL_spectrum(section, output_dir, computed_data: Compute
             continue
         
         figure_one_col(section, imgNamePng, taillePng="10cm", 
-            caption="Calculated Circular Dichroism Emission spectrum with a gaussian broadening (FWHM = 3000 cm-1)"
+            caption="Calculated circularly polarized luminescence spectrum with a Gaussian broadening (FWHM = 3000 cm-1)."
         )
         
         if (isContentAdded == False):
@@ -2257,6 +2531,7 @@ def render_optimized_es_EDD(section, output_dir, computed_data: ComputedData, co
     
     isContentAdded = False
     
+    cells = []
     for log_idx,log_file in enumerate(log_files):
         
         jobs = job_types[log_idx]
@@ -2277,23 +2552,23 @@ def render_optimized_es_EDD(section, output_dir, computed_data: ComputedData, co
         imgNamePng2 = f"img-log{log_idx + 1}-emi-EDD-{letter}{number}_cam2.png" 
         if (not os.path.isfile(output_dir + imgNamePng)) :
             continue
-        
-        if (os.path.isfile(output_dir + imgNamePng2)):
-            figure_two_col(section, imgNamePng, imgNamePng2, 
-                caption=f"Representation of the Electron Density Difference ({state}) after optimization of the excited state from two points of view. "
-                            + "The excited electron and the hole regions are indicated by respectively white and blue surfaces to ease "
-                            + f"comparison with the corresponding absorption transition. (Source: {log_file})"
-            )
-        else:
-            figure_one_col(section, imgNamePng, taillePng="10cm", 
-                caption=f"Representation of the Electron Density Difference ({state}) after optimization of the excited state. "
-                            + "The excited electron and the hole regions are indicated by respectively white and blue surfaces to ease "
-                            + f"comparison with the corresponding absorption transition. (Source: {log_file})"
-            )
-        
-        if (isContentAdded == False):
-            isContentAdded = True
-    
+        pngs = [imgNamePng] + ([imgNamePng2] if os.path.isfile(output_dir + imgNamePng2) else [])
+        cells.append((pngs, escape_latex(f"{state} ({log_file})")))
+
+    # One grid for all the optimized states (one figure per state before)
+    if cells:
+        two_views = any(len(pngs) == 2 for pngs, _ in cells)
+        figure_grid(section, cells, 1 if two_views else 2, max_width=None if two_views else 0.4, caption=
+                    "Electron density difference of the excited states at their optimized geometry"
+                    + (", from two points of view" if two_views else "")
+                    # Same sign as the absorption EDD (calc_orb.TD, rho_end - rho_start): the
+                    # excited electron is the positive surface. The caption said "white" for the
+                    # electron until 26/11/2026, the reverse of the pictures.
+                    + f". The excited electron and the hole regions are indicated by respectively "
+                    f"{color_of('EDD', 'positive')} and {color_of('EDD', 'negative')} surfaces, as for "
+                    "the absorption transitions.")
+        isContentAdded = True
+
     return isContentAdded    
 
 
@@ -2371,64 +2646,36 @@ def fill_additional_molecule_representations_section(doc, computed_data: Compute
                 return
             
             sources = ', '.join([log_files[i] for i in group])
-            figure_one_col(doc, nomPng, caption=f"Chemical structure diagram with atomic numbering. (Source: {sources})")
+            topology_figure(doc, output_dir, nomPng, f"(Source: {sources})")
+
+
+def ref_coordinates_shown_above(computed_data):
+    """Whether the reference coordinates are in the molecule section (small molecules)."""
+    ref_id = computed_data.metadata.ref_log_file_idx
+    atoms = computed_data.results.geometry.elements_3D_coords[ref_id]
+    # number of atoms, not of coordinates: the flat list made the reference table appear twice
+    return (atoms is not None
+            and len(np.array(atoms).reshape((-1, 3))) < MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE)
 
 
 def render_atomic_coordinates(doc, computed_data: ComputedData):
-    """Coordinate tables of the models not shown in the molecule section."""
-    ref_id = computed_data.metadata.ref_log_file_idx
-    
-    for i in range(len(computed_data.results.geometry.elements_3D_coords)):
-        log_file = computed_data.metadata.log_files[i]
-        atoms = computed_data.results.geometry.elements_3D_coords[i]
-        atoms_Z = computed_data.molecule.atoms_Z[i]
-
-        # Skip if the atomic_coodinates for the reference was displayed above
-        if i == ref_id:
-            if atoms is not None and len(atoms) < MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE:
-                continue
-
-        # Skip if no data for this instance
-        if (
-            atoms is None
-            or atoms_Z is None
-        ):
-            continue
-
-        atoms = np.array(atoms).reshape((-1, 3))
-
-        render_atomic_coordinates_table(
-            doc=doc,
-            atoms=atoms,
-            atoms_Z=atoms_Z,
-            log_file=log_file,
-            table_title=coordinates_title(computed_data, i),
-        )
+    """Coordinate tables of the distinct geometries not shown in the molecule section."""
+    groups = geometry_groups(computed_data)
+    if groups and ref_coordinates_shown_above(computed_data):
+        groups = groups[1:]
+    for coords, members in groups:
+        render_coordinates_group(doc, computed_data, coords, members)
 
 
 def fill_atomic_coordinates_section(doc, computed_data: ComputedData):
-    """Final section of the atomic coordinates."""
-    ref_id = computed_data.metadata.ref_log_file_idx
-    all_atoms = computed_data.results.geometry.elements_3D_coords
-    all_atoms_Z = computed_data.molecule.atoms_Z
-
-    # Check if all elements in all_atoms are None
-    all_atoms_none = all(atom is None for atom in all_atoms)
-    all_atoms_Z_none = all(atom_Z is None for atom_Z in all_atoms_Z)
-
-    # Check if the only non-None element is the ref_id and it was displayed above
-    only_ref_present = (
-        sum(atom is not None for atom in all_atoms) == 1 and
-        all_atoms[ref_id] is not None and
-        len(all_atoms[ref_id]) < MAX_NUMBER_OF_ATOMS_TO_DISPLAY_ATOMIC_COORDINATE_REF_ABOVE
-    )
-
-    # If no data, or only ref data that is shown elsewhere, skip this section
-    if all_atoms_none or all_atoms_Z_none or only_ref_present:
+    """Final section of the atomic coordinates: the distinct geometries (see geometry_groups)."""
+    groups = geometry_groups(computed_data)
+    if groups and ref_coordinates_shown_above(computed_data):
+        groups = groups[1:]
+    if not groups:
         return
 
     with doc.create(Section('ATOMIC COORDINATES')):
-        # Render the table of atomic coordinates for each logfile if data is available
         render_atomic_coordinates(doc, computed_data)
 
 

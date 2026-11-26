@@ -317,12 +317,14 @@ def TD(data_model: LogData, transitions, grid_step=obk_step, nproc=4, verbose=Fa
     ## 1. Get all MOs involved in transitions and calculate them once
     MO_list_alpha, MO_list_beta = _density_difference_MOs(transitions)
     # States without excitation amplitudes in the log give None (no EDD, Lambda, d_CT, q_CT)
-    if not MO_list_alpha:
+    # (a pure beta excitation, as the emitting state of triplet O2, has no alpha orbital: the
+    # former test on the alpha list alone gave it no EDD)
+    if not MO_list_alpha and not MO_list_beta:
         return [None] * len(transitions), None, None, None
-    # Treat alpha orbitals
-    MOs_alpha, X, Y, Z = MO(data_model, MO_list_alpha, spin="alpha", grid_step=grid_step, nproc=nproc)
-    # Treat beta orbitals 
-    if len(MO_list_beta) > 0:
+    MOs_alpha, MOs_beta = [], []
+    if MO_list_alpha:
+        MOs_alpha, X, Y, Z = MO(data_model, MO_list_alpha, spin="alpha", grid_step=grid_step, nproc=nproc)
+    if MO_list_beta:
         MOs_beta, X, Y, Z = MO(data_model, MO_list_beta, spin="beta", grid_step=grid_step, nproc=nproc)
     
     dx, dy, dz = (X[10,0,0] - X[9,0,0]), (Y[0,10,0] - Y[0,9,0]), (Z[0,0,10] - Z[0,0,9])
@@ -335,8 +337,8 @@ def TD(data_model: LogData, transitions, grid_step=obk_step, nproc=4, verbose=Fa
         if len(T) == 0:
             out.append(None)
             continue
-        vox_data = np.zeros(MOs_alpha[0].shape)
-        vox_Oif = np.zeros(MOs_alpha[0].shape)      
+        vox_data = np.zeros(X.shape)
+        vox_Oif = np.zeros(X.shape)
         tozer = 0
         for j, subtrans in enumerate(T):
             #print("Processing Subtransition: ", subtrans)

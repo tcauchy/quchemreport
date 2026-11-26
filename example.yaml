@@ -68,7 +68,33 @@ output:
   image_grid_reduction: 2
   # Sensitive surfaces (density differences): EDD, Oif, Fukui, Fdual.
   image_grid_reduction_sensitive: 1
-  
+  # Main axis of the spectra: wavenumber (cm-1, linear in energy) or wavelength (nm).
+  spectrum_axis: wavenumber
+  # Range of the spectra, in the unit of spectrum_axis (e.g. [200, 600] in nm); omitted = automatic.
+  # spectrum_range: [200, 600]
+  # Views of the 3D pictures: auto (a second view only when one is not enough), 1 or 2.
+  camera_views: auto
+  # Colours of the iso-surfaces of the 3D pictures (positive / negative part); the values below
+  # are the defaults, and any of them may be omitted. A colour is "#RRGGBB", a colour name
+  # (teal, lightpink...) or [r, g, b] in 0-1. The captions name the colours: add e.g.
+  # positive_name: "dark red" when a "#RRGGBB" colour should not be named automatically.
+  # Prefer pairs that differ in lightness (dark / light): they stay distinct for colour-blind
+  # readers and in grey-scale prints. Avoid pure white: the hydrogens are white.
+  colors:
+    MO:    {positive: "#66003C", negative: "#FFEBDC"}  # purple / cream: orbital phases
+    EDD:   {positive: "#008080", negative: "#FFEBDC"}  # blue / cream: excited electron / hole
+    fukui: {positive: "#008080", negative: "#FFEBDC"}  # blue / cream: F+, F- and dual descriptor
+    NTO:   {positive: "#5B6A8F", negative: "#FFEBDC"}  # blue-grey / cream: orbital phases
+  # Specular reflections (white highlights, glossy look) of the atoms, bonds and iso-surfaces:
+  # intensity 0-1, 0 = diffuse light only. Default 0.5. Not applied to the MEP surface.
+  specular: 0.5
+  # Renderer of the 3D pictures: vtk (default) or povray: ray-traced pictures (smooth edges,
+  # soft shadows, ambient occlusion), about 4 s more per picture with 16 threads. POV-Ray is
+  # looked for in the PATH and in the conda environment; else give povray_executable. Without
+  # it, a warning is printed and the pictures are rendered by VTK.
+  renderer: vtk
+  # povray_executable: /path/to/bin/povray
+
   include:
     molecule:
       # The image of the molecule topology that come from the reference logfile is display at the top in the Molecule Section
@@ -172,6 +198,7 @@ logging:
 
 # The points of view of the 3D pictures are chosen automatically from the geometry
 # (quchemreport/visualization_engine/camera.py); a former camera_view section is ignored.
+# Only their number can be set, with output.camera_views.
 
 resources:
   nproc: 4 # threads for the grid computations (orbitals, MEP, densities); omitted = 20

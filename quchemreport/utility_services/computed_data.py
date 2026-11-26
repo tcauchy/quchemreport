@@ -117,6 +117,8 @@ class FrequencyResults:
 class ExcitedStatesResults:
     """Excited state energies, strengths, amplitudes and dipoles of each model."""
     et_sym: List[Optional[List[str]]]
+    # <S^2> of the states of an open-shell reference (None for closed shells)
+    et_s2: List[Optional[List[float]]]
     et_energies: List[Optional[List[float]]]
     et_oscs: List[Optional[List[float]]]
     et_rot: List[Optional[List[Any]]]

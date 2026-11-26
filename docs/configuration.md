@@ -93,7 +93,48 @@ All checks default to `true`.
 | `image_size` | 1200 | Side of the square 3D pictures, in pixels (200 to 8000). 1200 px is 360 dpi in an 8.5 cm column; 2000 px is 600 dpi. |
 | `image_grid_reduction` | 2 | The orbital, MEP and NTO pictures are drawn on every k-th point of the computation grid (0.075 bohr): 1 = full grid, 2 = 0.15 bohr (2.5 to 3 times faster to draw). The numerical results always use the full grid. |
 | `image_grid_reduction_sensitive` | 1 | Same, for the density differences (EDD, Fukui functions), which are more sensitive. |
+| `spectrum_axis` | `wavenumber` | Main axis of the UV-visible, CD, emission, CPL and phosphorescence spectra: `wavenumber` (cm⁻¹, linear in energy) or `wavelength` (nm, as most experimental spectra). The other unit is on the top axis. |
+| `spectrum_range` | automatic | Range of the spectra on the main axis, in its unit (cm⁻¹ for `wavenumber`, nm for `wavelength`), for example `[200, 600]`. Automatic: every computed band, with three band widths (FWHM, 3000 cm⁻¹) on each side. |
+| `camera_views` | `auto` | Views of the 3D pictures: `auto` (a second picture, at 60-90 degrees, only when one view is not enough, see [The report](report.md)), `1` (never a second picture) or `2` (always, for example to show a stereocentre from two sides; linear molecules keep one view, their side views being all the same). |
+| `colors` | see below | Colours of the iso-surfaces of the 3D pictures, below. |
+| `renderer` | `vtk` | Renderer of the 3D pictures: `vtk`, or `povray` for ray-traced pictures (anti-aliased edges, soft shadows, ambient occlusion), about 4 s more per 1200 px picture with 16 threads. The scene and camera are those of VTK, so the framing and the labels are the same. Without POV-Ray, a warning is printed and VTK renders the pictures. |
+| `povray_executable` | none | Path of the POV-Ray executable, when it is neither in the `PATH` nor in the conda environment of quchemreport. |
+| `specular` | 0.5 | Specular reflections (white highlights, glossy look) of the atoms, bonds and iso-surfaces, 0 to 1; 0 is diffuse light only, as before November 2026. The MEP surface keeps diffuse light, so that no highlight hides its colour scale. |
 | `include` | required | Parts of the report, below. |
+
+### `output.colors`
+
+Colours of the positive and negative parts of the iso-surfaces. Every key is optional; an
+omitted colour keeps its default:
+
+| Key | Positive (default) | Negative (default) |
+|---|---|---|
+| `MO` | `"#66003C"` purple (Tyrian purple): one orbital phase | `"#FFEBDC"` cream: the other phase |
+| `EDD` | `"#008080"` blue: density gained (excited electron); also the charge-transfer dipole arrow | `"#FFEBDC"` cream: density lost (hole) |
+| `fukui` | `"#008080"` blue: F+ (electrophilic), F- (nucleophilic), dual descriptor (electrophilic) | `"#FFEBDC"` cream: dual descriptor (nucleophilic) |
+| `NTO` | `"#5B6A8F"` blue-grey: one phase of the hole and electron orbitals | `"#FFEBDC"` cream: the other phase |
+
+```yaml
+output:
+  colors:
+    NTO: {positive: "#2F4B7C", negative: lightpink}
+    EDD: {positive: [0.0, 0.4, 0.7], positive_name: "dark blue"}
+```
+
+A colour is `"#RRGGBB"` (quoted: `#` starts a YAML comment), a colour name known to matplotlib
+(`teal`, `lightpink`, `tab:blue`...) or `[r, g, b]` with values in 0-1. The captions of the
+report name the colours: `positive_name` / `negative_name` when given, otherwise the colour word,
+otherwise a plain name made from the value ("greyish blue", "light pink"). Unknown keys stop the
+program (a misspelt `postive` would otherwise leave the default silently).
+
+The NTO colours were green and gold until November 2026; they were replaced because they merge
+for red-green colour-blind readers (CIEDE2000 difference 18 for protanopia, 45 in normal vision),
+while the blue-grey (from the oleron map of F. Crameri) and the cream differ mainly in lightness
+and stay at 44-47 for protanopia, deuteranopia and tritanopia. Choose pairs of a dark and a
+light colour for the same reason; they also survive grey-scale printing. The light surfaces are
+cream rather than white, so that a small lobe is not taken for a hydrogen (white spheres); a
+paler cream such as `#FFF3F0` already looks white once shaded. The MEP colour scale (turbo) is
+not set here.
 
 ### `output.include`
 
@@ -161,4 +202,5 @@ anion at the reference geometry (type `sp`).
 ## Ignored sections
 
 `camera_view` (still present in older YAML files) is ignored: the points of view of the
-pictures are chosen automatically from the geometry (see [The report](report.md)).
+pictures are chosen automatically from the geometry (see [The report](report.md)); only their number
+can be set, with `output.camera_views`.

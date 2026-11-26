@@ -270,6 +270,7 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
         
         # Extract Excited States Results
         computed_data.results.excited_states.et_sym[i] = log.results.excited_states.et_sym
+        computed_data.results.excited_states.et_s2[i] = log.results.excited_states.et_s2
         computed_data.results.excited_states.et_eldips[i] = log.results.excited_states.et_eldips
         computed_data.results.excited_states.et_veldips[i] = log.results.excited_states.et_veldips
         computed_data.results.excited_states.et_magdips[i] = log.results.excited_states.et_magdips
@@ -367,6 +368,68 @@ def compute_all_MO_labels_and_indexes(computed_data: ComputedData, list_data_mod
             print(f"MO Labels and MO Indexes done for {log_file}")
 
 
+# Orbitals closer than this in energy (eV) are degenerate (the programs print 5 decimals in
+# hartree, 3e-4 eV)
+DEGENERATE_EV = 0.01
+
+
+def degenerate_partners(energies, index, tol=DEGENERATE_EV):
+    """Indexes of the other orbitals degenerate with orbital index (energies of one spin, eV)."""
+    if energies is None or index is None or not 0 <= index < len(energies):
+        return []
+    return [k for k in range(len(energies)) if k != index and abs(energies[k] - energies[index]) < tol]
+
+
+def show_degenerate_pairs(voxels, indexes, energies, X, Y, Z, direction, centre, grid_of):
+    """Pictures of degenerate pairs of orbitals seen alike from the first point of view.
+
+    Any combination of two degenerate orbitals is as valid as the pair given by the program,
+    which is arbitrary (ORCA) or follows the axes of its frame (Gaussian). Seen from the side,
+    one orbital of the pi pair of O2 was in the picture plane and the other pointed at the
+    camera (two balls over the atoms, 26/11/2026). Each requested orbital of a degenerate pair
+    is replaced by the combination cos t phi_i + sin t phi_j whose extent along the view,
+    Q = sum phi^2 (d.(r - c))^2, equals that of its partner: for a pi pair seen from the side,
+    two orbitals at 45 degrees to the view, both showing their lobes. The partner, when not
+    requested, is computed by grid_of(index). Groups of three or more degenerate orbitals are
+    left as they are.
+
+    voxels: array (n, nx, ny, nz), the grids of indexes (modified in place); energies: of this
+    spin (eV); X, Y, Z: grid (bohr); direction: unit vector to the camera; centre: bohr.
+    Returns the pairs rotated, as (index, partner)."""
+    d = np.asarray(direction, dtype=float)
+    depth2 = (d[0] * (X - centre[0]) + d[1] * (Y - centre[1]) + d[2] * (Z - centre[2])) ** 2
+    done, rotated = set(), []
+    for pos, i in enumerate(indexes):
+        partners = degenerate_partners(energies, i)
+        if len(partners) != 1 or i in done:
+            continue
+        j = partners[0]
+        phi_i = voxels[pos]
+        phi_j = voxels[indexes.index(j)] if j in indexes else np.asarray(grid_of(j))
+        q11, q22 = np.sum(phi_i ** 2 * depth2), np.sum(phi_j ** 2 * depth2)
+        q12 = np.sum(phi_i * phi_j * depth2)
+        t = 0.5 * np.arctan2(q22 - q11, 2 * q12) if abs(q22 - q11) + abs(q12) > 0 else 0.0
+        # the rotation closest to the original pair (|t| <= 45 degrees)
+        t = (t + np.pi / 4) % (np.pi / 2) - np.pi / 4
+        c, s_ = np.cos(t), np.sin(t)
+        new_i, new_j = c * phi_i + s_ * phi_j, -s_ * phi_i + c * phi_j
+        voxels[pos] = new_i
+        if j in indexes:
+            voxels[indexes.index(j)] = new_j
+        done.update((i, j))
+        rotated.append((i, j))
+    return rotated
+
+
+def _view_and_centre(ref_data):
+    """First camera direction, centre (bohr) and vertical of the picture of the reference
+    (camera.choose_views)."""
+    from quchemreport.visualization_engine import camera
+    coords = np.asarray(ref_data.results.geometry.elements_3D_coords, dtype=float).reshape(-1, 3)
+    view = camera.choose_views(coords, ref_data.molecule.atoms_Z, ref_data.molecule.connectivity.atom_pairs)[0]
+    return view.direction, coords.mean(axis=0) / a0_to_A, view.up
+
+
 def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, step):
     """Grids of the requested orbitals of the reference (one set per spin if unrestricted).
 
@@ -407,6 +470,10 @@ def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, s
             
             MO_list = MO_indexes[i]
             discretized_MO_voxels, grid_X, grid_Y, grid_Z = calc_orb.MO(ref_data, MO_list, spin, grid_step=step, nproc=nproc)
+            direction, centre, _ = _view_and_centre(ref_data)
+            show_degenerate_pairs(discretized_MO_voxels, list(MO_list), ref_data.results.wavefunction.MO_energies[i],
+                                  grid_X, grid_Y, grid_Z, direction, centre,
+                                  lambda k, spin=spin: calc_orb.MO(ref_data, [k], spin, grid_step=step, nproc=nproc)[0][0])
             
             setattr(
                 computed_data.derived.wavefunction.MO_analysis.MO_diagrams,
@@ -426,6 +493,10 @@ def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, s
             MO_labels = MO_labels[0]
             # MO_list = MO_indexes[0]
             discretized_MO_voxels, grid_X, grid_Y, grid_Z = calc_orb.MO(ref_data, MO_labels, spin="none", grid_step=step, nproc=nproc)
+            direction, centre, _ = _view_and_centre(ref_data)
+            show_degenerate_pairs(discretized_MO_voxels, list(MO_indexes[0]), ref_data.results.wavefunction.MO_energies[0],
+                                  grid_X, grid_Y, grid_Z, direction, centre,
+                                  lambda k: calc_orb.MO(ref_data, [k], spin="none", grid_step=step, nproc=nproc)[0][0])
             
             computed_data.derived.wavefunction.MO_analysis.MO_diagrams.restricted = MODiagramsComputedData(
                 "restricted",
@@ -559,8 +630,9 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
         coords = np.asarray(ref_data.results.geometry.elements_3D_coords, dtype=float).reshape(-1, 3) / a0_to_A
         computed_data.derived.wavefunction.MEP_maps.surface_isovalue = mep_surface.MEP_SURFACE_ISOVALUE
         computed_data.derived.wavefunction.MEP_maps.color_range = mep_surface.color_range(ref_data.molecule.charge or 0)
-        computed_data.derived.wavefunction.MEP_maps.surface_extrema = mep_surface.mep_surface_extrema(
-            rho, MEP, grid_X, grid_Y, grid_Z, coords)
+        extrema = mep_surface.mep_surface_extrema(rho, MEP, grid_X, grid_Y, grid_Z, coords)
+        computed_data.derived.wavefunction.MEP_maps.surface_extrema = mep_surface.merge_rings(
+            extrema, coords, _view_and_centre(ref_data)[2])
     except Exception as e:
         print(f"Warning: MEP surface extrema skipped: {e}")
 
@@ -946,19 +1018,10 @@ def compute_es_Abso_and_CD_spectrum(computed_data: ComputedData, log_idx, do_abs
     if et_rotats == None:
         et_rotats = []
 
-    # Spectrum width should min cm-1 - 9000 (min 5000), max cm-1 + 9000 (max 100000 cm-1)  
-    td_start = max(5000, round(min(et_energies) - 9000, -3))
-    td_end = min(100000, round(max(et_energies) + 9000, -3))
-    numpts = int(np.floor((td_end - td_start)/20))
-
-        
-    
-    if (
-        len(et_energies) == 0
-        and len(et_oscs) == 0 
-    ):
+    if len(et_energies) == 0:
         return
-    
+    td_start, td_end, numpts = TD2UVvis.spectrum_grid(et_energies, FWHM)
+
     # Calculating the Gaussian broadening based on wavenumbers
     heights = [[x*2.174e8/FWHM for x in et_oscs]]
     xvalues, abso_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,et_energies,heights,FWHM)
@@ -1341,14 +1404,7 @@ def compute_optimized_es_emi_and_CPL_spectrum(computed_data: ComputedData, log_i
     else:
         emi_rotat = 0.0
 
-    # Spectrum width should min cm-1 - 9000 (min 5000), max cm-1 + 9000 (max 100000 cm-1)  
-    td_start = round(int(emi_energy) - 9000, -3)
-    td_end = round(int(emi_energy) + 9000, -3)
-    if td_start < 5000:
-        td_start = 5000
-    if td_end > 150000 :
-        td_end = 150000
-    numpts = int((td_end - td_start)/20)
+    td_start, td_end, numpts = TD2UVvis.spectrum_grid([emi_energy], FWHM)
     
     if emi_osc == 0.0 :
         print("The oscillator strength is 0.0. The emission spectra won't be computed.")
@@ -1413,9 +1469,7 @@ def compute_phosphorescence(computed_data: ComputedData, log_idx, emi_state):
         return
     k_mean = sum(s["k_r"] for s in sublevels) / len(sublevels)
     energies = [s["energy"] for s in sublevels]
-    td_start = max(5000, round(min(energies) - 9000, -3))
-    td_end = min(150000, round(max(energies) + 9000, -3))
-    numpts = int((td_end - td_start) / 20)
+    td_start, td_end, numpts = TD2UVvis.spectrum_grid(energies, FWHM)
     heights = [[s["fosc"] * 2.174e8 / FWHM for s in sublevels]]
     xvalues, spectrum = TD2UVvis.GaussianSpectrum(td_start, td_end, numpts, energies, heights, FWHM)
     computed_data.derived.optimized_excited_states.phosphorescence[log_idx] = {

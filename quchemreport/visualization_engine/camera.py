@@ -14,6 +14,13 @@ View 2 is only drawn when one view is not enough:
     folded adducts, stacked complexes); view 2 looks across them, to show the gap;
   - "rings edge-on": view 1 shows most rings edge-on; view 2, at 60-90 degrees, faces them;
   - "globular": the smallest principal axis is at least 0.4 times the largest one.
+The YAML option output.camera_views overrides this choice: 1 never draws view 2, 2 always draws
+it ("requested": the best view at 60-90 degrees from view 1, as for a globular molecule), except
+for linear molecules, whose side views are all the same.
+Why the override (26/11/2026, Thomas Cauchy): the threshold cannot suit every use. HCFClBr
+(lambda3/lambda1 = 0.398 after optimization, g09 and ORCA) falls just below 0.4 and gets one
+view, whereas showing a stereocentre from two sides is often wanted; lowering the threshold
+would give a second view to most CH3X (0.35-0.40) as well.
 
 Why (24/11/2026, with Thomas Cauchy): the former views were fixed angles
 (mlab.view(azimuth=90, elevation=10) and (10, 80)) in the frame of the program, so the pictures
@@ -59,12 +66,15 @@ class View:
     """A camera view: direction from the molecule to the camera, vertical of the picture, and why it was chosen."""
     direction: np.ndarray   # unit vector from the molecule to the camera
     up: np.ndarray          # unit vector, vertical of the picture
-    reason: str             # "best", "linear", "facing rings", "rings edge-on" or "globular"
+    reason: str             # "best", "linear", "facing rings", "rings edge-on", "globular" or "requested"
 
 
-def choose_views(coords, atoms_Z=None, atom_pairs=None):
+def choose_views(coords, atoms_Z=None, atom_pairs=None, n_views="auto"):
     """Views (1 or 2) of the molecule. coords: (n, 3) in Angstrom (any frame); atoms_Z: atomic
-    numbers (weights); atom_pairs: bonds as index pairs (rings), both optional."""
+    numbers (weights); atom_pairs: bonds as index pairs (rings), both optional. n_views: "auto"
+    (second view only when needed), 1 or 2 (forced, except for linear molecules: one view)."""
+    if n_views not in ("auto", 1, 2):
+        raise ValueError(f"n_views must be 'auto', 1 or 2, not {n_views!r}")
     xyz = np.asarray(coords, dtype=float).reshape(-1, 3)
     w, v = principal_axes(xyz)
     if len(xyz) < 3 or w[1] <= 1e-6 * max(w[0], 1e-12):
@@ -85,6 +95,8 @@ def choose_views(coords, atoms_Z=None, atom_pairs=None):
         d = _rotate(d, axis, PLANAR_TILT)
     d = _front(xyz, d, atoms_Z)
     views = [View(d, _up(d, v), "best")]
+    if n_views == 1:
+        return views
 
     rings = small_rings(len(xyz), atom_pairs) if atom_pairs is not None else []
     facing = facing_rings_normal(xyz, rings, atom_pairs) if rings else None
@@ -102,6 +114,10 @@ def choose_views(coords, atoms_Z=None, atom_pairs=None):
         across = directions[np.abs(directions @ d) < 0.5]
         d2 = _front(xyz, _best(xyz, across, weights), atoms_Z)
         views.append(View(d2, _up(d2, v), "globular"))
+    elif n_views == 2:
+        across = directions[np.abs(directions @ d) < 0.5]
+        d2 = _front(xyz, _best(xyz, across, weights), atoms_Z)
+        views.append(View(d2, _up(d2, v), "requested"))
     return views
 
 

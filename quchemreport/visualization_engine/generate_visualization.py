@@ -676,7 +676,7 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
 
 
 def output_nto_images(computed_data: ComputedData, config: Config):
-    """Pictures of the NTO pairs (hole and electron, green and gold) of the selected states,
+    """Pictures of the NTO pairs (hole and electron, colours output.colors.NTO) of the selected states,
     computed one pair at a time on the common grid (calc_orb.nto_pair).
     """
     ref = computed_data.derived.excited_states.nto_reference
@@ -698,9 +698,7 @@ def output_nto_images(computed_data: ComputedData, config: Config):
                                                   reduction=config.output.image_grid_reduction)
                 visu_mayavi.viz_MO(data, x, y, z, ref.results.geometry.elements_3D_coords,
                                    ref.molecule.connectivity.atom_pairs, ref.molecule.atoms_Z,
-                                   file_name=prefix, labels=["hole", "electron"],
-                                   positive_color=(0.05, 0.53, 0.18),
-                                   negative_color=(0.95, 0.65, 0.05),
+                                   file_name=prefix, labels=["hole", "electron"], kind="NTO",
                                    reduction=1)  # already reduced by nto_pair
 
 

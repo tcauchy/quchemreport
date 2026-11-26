@@ -22,6 +22,36 @@ Adapted from GaussSum (N. M. O'Boyle, A. L. Tenderholt and K. M. Langner, J. Com
 import math 
 import numpy as np
 
+# Range of the spectra chosen in the YAML file (output.spectrum_range), in cm-1, or None
+USER_RANGE_CM = None
+# Grid of the broadened spectra (cm-1)
+GRID_STEP = 20.0
+# The spectrum extends this many FWHM beyond the first and last band (3 FWHM: the Gaussian
+# is at 1e-11 of its height). Why (26/11/2026): the former rule capped the absorption grid at
+# 100000 cm-1 (emission and phosphorescence at 150000), so the curve of O2 stopped at 100 nm
+# while its sticks at 125000 cm-1 (80 nm, f = 0.08) were still drawn.
+MARGIN_FWHM = 3.0
+LOWEST = 1000.0   # cm-1 (10 micrometres): no spectrum below
+
+
+def set_user_range(lo_hi_cm):
+    """Range of the spectra in cm-1 (output.spectrum_range converted), or None (automatic)."""
+    global USER_RANGE_CM
+    USER_RANGE_CM = None if lo_hi_cm is None else (min(lo_hi_cm), max(lo_hi_cm))
+
+
+def spectrum_grid(energies, FWHM):
+    """Start, end (cm-1) and number of points of a spectrum of the given band energies: every
+    band with MARGIN_FWHM widths on both sides, and the user range when it is wider."""
+    energies = [e for e in energies if e is not None]
+    start = min(energies) - MARGIN_FWHM * FWHM
+    end = max(energies) + MARGIN_FWHM * FWHM
+    if USER_RANGE_CM is not None:
+        start, end = min(start, USER_RANGE_CM[0]), max(end, USER_RANGE_CM[1])
+    start = max(LOWEST, math.floor(start / 1000.0) * 1000.0)
+    end = math.ceil(end / 1000.0) * 1000.0
+    return start, end, int(round((end - start) / GRID_STEP)) + 1
+
 def GaussianSpectrum(start,end,numpts,et_energies,heights,FWHM):
 # Calculate the absorption spectra with a gaussian broadening. Adapted from the GaussSum program
 # et_energies is a list of excited states energies in cm-1
