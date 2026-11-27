@@ -7,6 +7,8 @@ when the Config object is built (YAML_loader.load_yaml_config): a wrong value st
 before any log file is read, with a message naming the option.
 """
 
+import re
+
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator, validator, root_validator
 from typing import List, Optional, Tuple, Union, Dict
 from pathlib import Path
@@ -154,18 +156,45 @@ class ReactivityInclude(BaseModel):
 
 class ExcitedStatesSelection(BaseModel):
     """``output.include.excited_states.selection``: excited states shown in the tables and
-    pictures: ``dominant_only``, the first ``first_n`` states, or ``all_states``.
+    pictures (density differences, NTO, transition densities and dipoles):
+
+    - ``relevant`` (default): the lowest states of each multiplicity, the states that make the
+      bands of the absorption and CD spectra, the triplets coupled to S1 (spin-orbit), and the
+      ``states`` asked for, at most ``max_selected_states`` (data_enrichment.state_selection);
+    - ``dominant_only``: the former rule, kept for old YAML files (first five states, plus
+      f > 0.1 or |R| > 10);
+    - ``first_n``: the first ``first_n`` states; ``all_states``: every state.
     """
-    mode: str
+    mode: str = "relevant"
     first_n: Optional[int] = None
+    # mode relevant: smallest maximum of a band, as a share of the largest maximum of the same
+    # spectrum (20 %: decision of Thomas Cauchy, 27/11/2026; 5 to 20 % change the selection by
+    # one state at most on the calibration molecules)
+    band_share: float = Field(default=0.20, gt=0, lt=1)
+    # mode relevant: largest number of states kept (not the number of computed states); 15
+    # (Thomas Cauchy, 27/11/2026): 10 was too small with absorption, CD, singlets and triplets
+    max_selected_states: int = Field(default=15, ge=1)
+    # mode relevant: states always kept, by name (S4, T2) or number in the log (4)
+    states: List[str] = Field(default_factory=list)
 
     @field_validator("mode")
     def mode_must_be_valid(cls, v: str) -> str:
-        """Accept dominant_only, first_n or all_states."""
-        allowed = {"dominant_only", "first_n", "all_states"}
+        """Accept relevant, dominant_only, first_n or all_states."""
+        allowed = {"relevant", "dominant_only", "first_n", "all_states"}
         if v not in allowed:
             raise ValueError(f"mode must be one of {allowed}. Not '{v}' .")
         return v
+
+    @field_validator("states", mode="before")
+    def states_as_names(cls, v):
+        """S4, T2 or a state number; numbers given as integers are accepted."""
+        if v is None:
+            return []
+        names = [str(x).strip() for x in v]
+        for name in names:
+            if not re.fullmatch(r"([SDTQP]\d+|\d+)", name, flags=re.IGNORECASE):
+                raise ValueError(f"selection.states: '{name}' is not a state name (S4, T2) or number.")
+        return names
 
     @model_validator(mode="after")
     def check_first_n_if_needed(self) -> "ExcitedStatesSelection":
@@ -346,6 +375,10 @@ class Output(BaseModel):
     # cm-1), energy (or eV), both linear in energy, or wavelength (or nm, as most experimental
     # spectra).
     spectrum_axis: str = "wavenumber"
+    # Full width at half maximum of the Gaussian bands of the spectra (cm-1): absorption, CD,
+    # emission, CPL, phosphorescence, and the bands of the selection of the excited states
+    # (selection.mode relevant), so that the bands selected are those seen.
+    spectrum_fwhm: float = Field(default=3000.0, gt=0, le=20000)
     # Unit of the top axis of the spectra: auto (nm, or cm-1 when the main axis is in nm), a
     # unit as for spectrum_axis (different from it), or none.
     spectrum_secondary_axis: Optional[str] = "auto"

@@ -44,10 +44,19 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
    oscillator and rotatory strengths, R in the length and velocity gauges when the log gives the
    velocity and magnetic transition dipoles (Gaussian); Lambda, d_CT in pm, q_CT in e; main excitations in %
    named from the HOMO and LUMO, e.g. H-1->L), absorption and CD spectra (CD only for a chiral molecule; Gaussian bands,
-   3000 cm-1 wide; axes in cm-1, eV or nm, `output.spectrum_axis` and
+   3000 cm-1 wide by default, `output.spectrum_fwhm`; axes in cm-1, eV or nm, `output.spectrum_axis` and
    `spectrum_secondary_axis`; range: from the lowest computed state, dark states as open circles, to
    the last visible band, with a 10 % margin, or `output.spectrum_range`), density
    differences and natural transition orbitals shown as grids of the selected states.
+   **Selected states** (`selection.mode: relevant`, the default): the three lowest states of
+   each multiplicity (S1-S3, T1-T3), even dark; for each band of the absorption spectrum, and of
+   the positive and negative CD bands, at least 20 % of the largest band of the same spectrum
+   (`band_share`), the states that make half of it at its maximum; with spin-orbit couplings
+   (ORCA), T1 and the triplets within 0.3 eV of S1 coupled to it; the states of
+   `selection.states`; at most 15 (`max_selected_states`). A band near the last computed state
+   is left out (the spectrum is cut there). The note under the table gives the reason of each
+   state. Calibrated on [6]helicene (40 singlets, 20 triplets), a push-pull dye, acetone and
+   CHFClBr: 7 to 11 states.
    Open-shell reference (e.g. triplet O2): TD-DFT only gives the states with the same spin
    projection, named after the multiplicity of the reference (T1, T2... for a triplet; D1... for
    a doublet), with their <S^2> in an extra column, in bold when it is more than 0.1 away from

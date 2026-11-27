@@ -2013,6 +2013,33 @@ def dark_states_note(heights):
             "the axis reaches the lowest computed state, even a dark one.")
 
 
+def fwhm_text(computed_data: ComputedData):
+    """FWHM of the spectra for the captions, e.g. '3000 cm-1' (output.spectrum_fwhm)."""
+    from quchemreport.utility_services.parameters import FWHM
+    return f"{(computed_data.metadata.spectrum_fwhm or FWHM):g} cm-1"
+
+
+def selection_note(computed_data: ComputedData, log_idx):
+    """Sentence of the transitions table giving why each state was selected (selection.mode
+    relevant, compute.select_excited_states_indices), states with the same reasons together, and
+    the states left out by the cap; "" for the other modes."""
+    reasons = computed_data.derived.excited_states.selection_reasons[log_idx]
+    if not reasons:
+        return ""
+    energies = computed_data.results.excited_states.et_energies[log_idx]
+    et_sym = computed_data.results.excited_states.et_sym[log_idx]
+    groups = {}
+    for k in sorted(reasons, key=lambda k: energies[k]):
+        groups.setdefault(", ".join(reasons[k]), []).append(state_label(et_sym, k))
+    text = (f" States shown ({len(reasons)} of {len(energies)}): "
+            + "; ".join(f"{', '.join(labels)}: {why}" for why, labels in groups.items()) + ".")
+    dropped = computed_data.derived.excited_states.selection_dropped[log_idx]
+    if dropped:
+        text += (f" Also relevant but left out by the cap (selection.max_selected_states): "
+                 + ", ".join(state_label(et_sym, k) for k in sorted(dropped, key=lambda k: energies[k])) + ".")
+    return " " + escape_latex(text.strip())
+
+
 def render_excited_state_transitions_table(doc, computed_data: ComputedData, log_idx, is_optimized=False, indices=None, report_type="full", title=""):
 
     """Table of the selected excited states of a model: symmetry, wavelength (nm) and
@@ -2185,6 +2212,8 @@ def render_excited_state_transitions_table(doc, computed_data: ComputedData, log
         if use_full:
             note += (r"$\Lambda$: hole-electron overlap (0 to 1, small for charge transfer); "
                      r"d$_{CT}$, q$_{CT}$: charge-transfer distance and charge.")
+            if not is_optimized:
+                note += selection_note(computed_data, log_idx)
         es_transitions_table.add_row([MultiColumn(ncols, align=NoEscape(RAGGED + '{0.95\\textwidth}'),
                                                   data=NoEscape(r"\footnotesize " + note))])
 
@@ -2264,7 +2293,7 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
         imgNameAbso = f"img-log{log_idx + 1}-UV-Abso-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameAbso)) :
             figure_one_col(section, imgNameAbso, taillePng="10cm", 
-                caption=("Calculated UV-visible absorption spectrum with a Gaussian broadening (FWHM = 3000 cm-1)."
+                caption=(f"Calculated UV-visible absorption spectrum with a Gaussian broadening (FWHM = {fwhm_text(computed_data)})."
                          + dark_states_note(computed_data.results.excited_states.et_oscs[log_idx])
                          + f" (Source: {log_file})")
             )
@@ -2275,7 +2304,7 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
         imgNameCD= f"img-log{log_idx + 1}-UV-CD-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameCD)) :
             figure_one_col(section, imgNameCD, taillePng="10cm", 
-                caption=("Calculated circular dichroism spectrum with a Gaussian broadening (FWHM = 3000 cm-1)."
+                caption=(f"Calculated circular dichroism spectrum with a Gaussian broadening (FWHM = {fwhm_text(computed_data)})."
                          + dark_states_note(computed_data.results.excited_states.et_rot[log_idx])
                          + f" (Source: {log_file})")
             )
@@ -2740,7 +2769,7 @@ def render_phosphorescence(section, output_dir, computed_data: ComputedData, rep
         picture = f"img-log{log_idx + 1}-Phospho-Spectrum.png"
         if os.path.isfile(output_dir + picture):
             figure_one_col(section, picture, taillePng="10cm", caption=(
-                "Calculated phosphorescence spectrum: one Gaussian band (FWHM = 3000 cm-1) per sublevel "
+                f"Calculated phosphorescence spectrum: one Gaussian band (FWHM = {fwhm_text(computed_data)}) per sublevel "
                 "of the triplet, weighted by its oscillator strength."))
         render_soc_couplings(section, output_dir, computed_data, log_idx, report_type)
         added = True
@@ -2827,7 +2856,7 @@ def render_optimized_es_emission_spectrum(section, output_dir, computed_data: Co
             continue
         
         figure_one_col(section, imgNamePng, taillePng="10cm", 
-            caption=("Calculated UV-visible emission spectrum with a Gaussian broadening (FWHM = 3000 cm-1). "
+            caption=(f"Calculated UV-visible emission spectrum with a Gaussian broadening (FWHM = {fwhm_text(computed_data)}). "
                      f"(Source: {log_files[log_idx]})")
         )
         
@@ -2879,7 +2908,7 @@ def render_optimized_es_CPL_spectrum(section, output_dir, computed_data: Compute
             continue
         
         figure_one_col(section, imgNamePng, taillePng="10cm", 
-            caption="Calculated circularly polarized luminescence spectrum with a Gaussian broadening (FWHM = 3000 cm-1)."
+            caption=f"Calculated circularly polarized luminescence spectrum with a Gaussian broadening (FWHM = {fwhm_text(computed_data)})."
         )
         
         if (isContentAdded == False):

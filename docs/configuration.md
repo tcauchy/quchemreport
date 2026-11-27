@@ -95,6 +95,7 @@ All checks default to `true`.
 | `image_grid_reduction_sensitive` | 1 | Same, for the density differences (EDD, Fukui functions), which are more sensitive. |
 | `if_exists` | `ask` | When `<output_path>/<molecule_designated_name>` already holds a report: `ask` (in a terminal, choose a new folder, to overwrite or to stop; without a terminal, e.g. a Slurm job, quchemreport stops at once with a message), `new` (a new folder `<name>_2`, `<name>_3`...), `overwrite` (the files made by quchemreport are deleted first; the other files of the folder are kept) or `stop`. |
 | `spectrum_axis` | `wavenumber` | Main axis of the UV-visible, CD, emission, CPL and phosphorescence spectra: `wavenumber` (or `cm-1`) and `energy` (or `eV`), linear in energy and decreasing to the right, or `wavelength` (or `nm`, as most experimental spectra). |
+| `spectrum_fwhm` | 3000 | Full width at half maximum of the Gaussian bands of the spectra, in cm⁻¹ (absorption, CD, emission, CPL, phosphorescence); the selection of the excited states (`relevant`) finds its bands with the same width, so that the bands selected are those of the spectra. |
 | `spectrum_secondary_axis` | `auto` | Unit of the top axis of the spectra: `auto` (nm, or cm⁻¹ when the main axis is in nm), `wavenumber`/`cm-1`, `energy`/`eV`, `wavelength`/`nm` (different from the main axis), or `none` (no top axis). |
 | `spectrum_range` | automatic | Range of the spectra on the main axis, in its unit (cm⁻¹, eV or nm), for example `[200, 600]` in nm. Automatic: from the lowest computed state, even a dark one (shown as an open circle), to the last band that can be seen (curve or stick above 0.5 % of the largest), with a margin of 10 % of that range on each side. A dark state above the visible bands is left out: the states above the last computed one, which could cover it, are unknown. |
 | `camera_views` | `auto` | Views of the 3D pictures: `auto` (a second picture, at 60-90 degrees, only when one view is not enough, see [The report](report.md)), `1` (never a second picture) or `2` (always, for example to show a stereocentre from two sides; linear molecules keep one view, their side views being all the same). |
@@ -174,7 +175,10 @@ anion at the reference geometry (type `sp`).
 
 | Key | Meaning |
 |---|---|
-| `selection.mode` | States shown: `dominant_only` (the first five, then the intense ones), `first_n` or `all_states`. |
+| `selection.mode` | States shown in the tables and pictures (density differences, NTO, transition densities and dipoles): `relevant` (default, below), `dominant_only` (former rule: the first five, then f > 0.1 or abs(R) > 10), `first_n` or `all_states`. |
+| `selection.band_share` | `relevant`: smallest band kept, as a share of the largest band of the same spectrum (default 0.20). |
+| `selection.max_selected_states` | `relevant`: largest number of states shown (default 15); not the number of states computed. |
+| `selection.states` | `relevant`: states always shown, by name or number in the log, e.g. `[S4, T2]`. |
 | `selection.first_n` | Number of states for `first_n`. |
 | `transitions` | Table of the states (wavelength, strengths, main excitations, charge-transfer indices). |
 | `absorption_spectrum`, `CD_spectrum` | Spectra (Gaussian broadening). The CD spectrum (and the CPL spectrum of an optimized excited state) is only drawn for a chiral molecule (a rotatory strength above 0.001 × 10⁻⁴⁰ cgs); otherwise the report says why it is missing. |

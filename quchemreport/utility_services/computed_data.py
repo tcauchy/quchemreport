@@ -24,6 +24,8 @@ class Metadata:
     output_dir: str
     # YAML logfiles index of each model (several models per log file for multi-step logs)
     config_indexes: List[Optional[int]]
+    # FWHM of the Gaussian bands of the spectra (cm-1), output.spectrum_fwhm
+    spectrum_fwhm: Optional[float]
 
 
 @dataclass
@@ -269,6 +271,10 @@ class ExcitedStatesDerivedData:
     """
     nto_pairs: List[Optional[Any]]
     nto_reference: Optional[Any]
+    # selected states (selection.mode relevant): {state index: [reasons]}, and the states that
+    # the cap (max_selected_states) left out
+    selection_reasons: List[Optional[Any]]
+    selection_dropped: List[Optional[Any]]
     Tozer_lambda: List[Optional[List[float]]]
     d_ct: List[Optional[List[float]]]
     q_ct: List[Optional[List[float]]]

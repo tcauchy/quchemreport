@@ -38,6 +38,7 @@ from quchemreport.utility_services.computed_data import ComputedData, FukuiData,
 from quchemreport.utility_services.log_data import LogData
 from quchemreport.utility_services.validated_data import ValidatedData
 from quchemreport.utility_services.parameters import FWHM, obk_step
+from quchemreport.data_enrichment import state_selection
 from quchemreport.utility_services.units import a0_to_A
 from quchemreport.utility_services.naming import spin_letter
 from quchemreport.utility_services.naming import spin_letter, state_number
@@ -1027,9 +1028,18 @@ def compute_reactivity(computed_data: ComputedData, validated_data: ValidatedDat
     if compute_flags.compute_fukui_functions:
         compute_fukui_functions(computed_data, ref_data, log_SP_plus, log_SP_minus, step, precomputed_rho_opt=precomputed_rho_opt)
 
-def select_excited_states_indices(computed_data: ComputedData, log_idx, selection_mode="dominant_only", n=5, osc_threshold=0.1, rot_threshold=10):
+def spectrum_fwhm(computed_data):
+    """FWHM of the Gaussian bands of the spectra (cm-1): output.spectrum_fwhm, or the default
+    of parameters.FWHM."""
+    return computed_data.metadata.spectrum_fwhm or FWHM
+
+
+def select_excited_states_indices(computed_data: ComputedData, log_idx, selection_mode="dominant_only", n=5, osc_threshold=0.1, rot_threshold=10, selection=None):
     """Indexes (0-based) of the excited states shown in the report.
 
+    - ``"relevant"``: data_enrichment.state_selection, with the options of selection
+      (config ExcitedStatesSelection: band_share, max_selected_states, states); the reasons
+      are stored in derived.excited_states.selection_reasons;
     - ``"all_states"``: all the states;
     - ``"first_n"``: the first n states;
     - ``"dominant_only"``: the first five states, then the states with an oscillator
@@ -1069,6 +1079,24 @@ def select_excited_states_indices(computed_data: ComputedData, log_idx, selectio
     rots = rots if isinstance(rots, (list, tuple)) else []
     
     n_states = len(et_energies)
+
+    if selection_mode == "relevant":
+        options = dict(oscs=oscs if len(oscs) == n_states else None,
+                       rots=rots if len(rots) == n_states else None,
+                       soc=computed_data.results.excited_states.soc[log_idx],
+                       fwhm=spectrum_fwhm(computed_data),
+                       band_share=selection.band_share if selection else 0.20,
+                       forced=selection.states if selection else ())
+        cap = selection.max_selected_states if selection else 15
+        symmetries = computed_data.results.excited_states.et_sym[log_idx] or [""] * n_states
+        reasons = state_selection.relevant_states(et_energies, symmetries, max_selected=cap, **options)
+        dropped = state_selection.dropped_by_cap(et_energies, symmetries, reasons, **options)
+        computed_data.derived.excited_states.selection_reasons[log_idx] = reasons
+        computed_data.derived.excited_states.selection_dropped[log_idx] = dropped
+        if dropped:
+            print(f"Warning: selection of the excited states capped at {cap} (selection.max_selected_states): "
+                  f"{len(dropped)} more state(s) left out.")
+        return sorted(reasons)
 
     if selection_mode == "all_states":
         return list(range(n_states))
@@ -1111,7 +1139,7 @@ def select_excited_states_indices(computed_data: ComputedData, log_idx, selectio
 
 
 def compute_es_Abso_and_CD_spectrum(computed_data: ComputedData, log_idx, do_abso, do_cd):
-    """Absorption and CD spectra of one TD model (Gaussian broadening, FWHM in cm-1).
+    """Absorption and CD spectra of one TD model (Gaussian broadening, output.spectrum_fwhm in cm-1).
 
     The range covers the transitions with 9000 cm-1 margins (5000 to 100000 cm-1). No
     spectrum is computed when all oscillator (or rotatory) strengths are zero.
@@ -1153,11 +1181,11 @@ def compute_es_Abso_and_CD_spectrum(computed_data: ComputedData, log_idx, do_abs
 
     if len(et_energies) == 0:
         return
-    td_start, td_end, numpts = TD2UVvis.spectrum_grid(et_energies, FWHM)
+    td_start, td_end, numpts = TD2UVvis.spectrum_grid(et_energies, spectrum_fwhm(computed_data))
 
     # Calculating the Gaussian broadening based on wavenumbers
-    heights = [[x*2.174e8/FWHM for x in et_oscs]]
-    xvalues, abso_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,et_energies,heights,FWHM)
+    heights = [[x*2.174e8/spectrum_fwhm(computed_data) for x in et_oscs]]
+    xvalues, abso_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,et_energies,heights,spectrum_fwhm(computed_data))
     computed_data.derived.excited_states.xvalues[log_idx] = xvalues
     computed_data.derived.excited_states.abso_spectrum[log_idx] = abso_spectrum
     
@@ -1168,8 +1196,8 @@ def compute_es_Abso_and_CD_spectrum(computed_data: ComputedData, log_idx, do_abs
         print("The rotational strengths are always 0.0. The circular dichroism spectrum won't be plotted.")
         return
     
-    heights = TD2UVvis.CDheights(et_energies, et_rotats, FWHM)
-    xvalues, CD_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,et_energies,[heights], FWHM)
+    heights = TD2UVvis.CDheights(et_energies, et_rotats, spectrum_fwhm(computed_data))
+    xvalues, CD_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,et_energies,[heights], spectrum_fwhm(computed_data))
     computed_data.derived.excited_states.xvalues[log_idx] = xvalues
     computed_data.derived.excited_states.CD_spectrum[log_idx] = CD_spectrum
 
@@ -1274,9 +1302,9 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
     if moments is not None and len(moments) > 1:
         gs_eldip = (np.array(moments[0]) + np.array(moments[1]), np.array(moments[0]))
     
-    selection_mode = config.output.include.excited_states.selection.mode
-    first_n = config.output.include.excited_states.selection.first_n
-    selected_indices = select_excited_states_indices(computed_data, log_idx, selection_mode=selection_mode, n=first_n)
+    selection = config.output.include.excited_states.selection
+    selected_indices = select_excited_states_indices(computed_data, log_idx, selection_mode=selection.mode,
+                                                     n=selection.first_n, selection=selection)
     
     if (len(et_transitions)> 0):
     
@@ -1401,7 +1429,7 @@ def compute_nto_states(computed_data, log, ref_data, log_idx, config):
     selection = config.output.include.excited_states.selection
     indices = [i for i in select_excited_states_indices(computed_data, log_idx,
                                                         selection_mode=selection.mode,
-                                                        n=selection.first_n)
+                                                        n=selection.first_n, selection=selection)
                if i < len(transitions)]
     options = config.output.include.excited_states.natural_transition_orbitals
     states = []
@@ -1544,14 +1572,14 @@ def compute_optimized_es_emi_and_CPL_spectrum(computed_data: ComputedData, log_i
     else:
         emi_rotat = 0.0
 
-    td_start, td_end, numpts = TD2UVvis.spectrum_grid([emi_energy], FWHM)
+    td_start, td_end, numpts = TD2UVvis.spectrum_grid([emi_energy], spectrum_fwhm(computed_data))
     
     if emi_osc == 0.0 :
         print("The oscillator strength is 0.0. The emission spectra won't be computed.")
     else:
         # Calculating the Gaussian broadening based on wavenumbers
-        heights = [[emi_osc*2.174e8/FWHM]]
-        xvalues, emi_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,[emi_energy],heights,FWHM)
+        heights = [[emi_osc*2.174e8/spectrum_fwhm(computed_data)]]
+        xvalues, emi_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,[emi_energy],heights,spectrum_fwhm(computed_data))
         computed_data.derived.optimized_excited_states.xvalues[log_idx] = xvalues
         computed_data.derived.optimized_excited_states.emi_spectrum[log_idx] = emi_spectrum
         print("Computing Emission Spectrum done")
@@ -1562,8 +1590,8 @@ def compute_optimized_es_emi_and_CPL_spectrum(computed_data: ComputedData, log_i
         return
     else:
         # Calculating the Gaussian broadening for the CPL Spectrum
-        heights = TD2UVvis.CDheights([emi_energy], [emi_rotat], FWHM)
-        xvalues, CPL_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,[emi_energy],[heights], FWHM)
+        heights = TD2UVvis.CDheights([emi_energy], [emi_rotat], spectrum_fwhm(computed_data))
+        xvalues, CPL_spectrum = TD2UVvis.GaussianSpectrum(td_start,td_end,numpts,[emi_energy],[heights], spectrum_fwhm(computed_data))
         computed_data.derived.optimized_excited_states.CPL_spectrum[log_idx] = CPL_spectrum
         computed_data.derived.optimized_excited_states.xvalues[log_idx] = xvalues
         print("Computing CPL Spectrum done")
@@ -1609,9 +1637,9 @@ def compute_phosphorescence(computed_data: ComputedData, log_idx, emi_state):
         return
     k_mean = sum(s["k_r"] for s in sublevels) / len(sublevels)
     energies = [s["energy"] for s in sublevels]
-    td_start, td_end, numpts = TD2UVvis.spectrum_grid(energies, FWHM)
-    heights = [[s["fosc"] * 2.174e8 / FWHM for s in sublevels]]
-    xvalues, spectrum = TD2UVvis.GaussianSpectrum(td_start, td_end, numpts, energies, heights, FWHM)
+    td_start, td_end, numpts = TD2UVvis.spectrum_grid(energies, spectrum_fwhm(computed_data))
+    heights = [[s["fosc"] * 2.174e8 / spectrum_fwhm(computed_data) for s in sublevels]]
+    xvalues, spectrum = TD2UVvis.GaussianSpectrum(td_start, td_end, numpts, energies, heights, spectrum_fwhm(computed_data))
     computed_data.derived.optimized_excited_states.phosphorescence[log_idx] = {
         "state": label, "sublevels": sublevels, "k_r": k_mean,
         "lifetime": 1.0 / k_mean if k_mean > 0 else None,
@@ -1845,6 +1873,7 @@ def compute_data(list_data_models: List[LogData], validated_data: ValidatedData,
     output_dir = config.output.report_folder()
     os.makedirs(output_dir, exist_ok=True)
     computed_data.metadata.output_dir = output_dir
+    computed_data.metadata.spectrum_fwhm = config.output.spectrum_fwhm
     
     # Get report type
     report_type = config.output.verbosity

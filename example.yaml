@@ -73,6 +73,9 @@ output:
   # without one, e.g. a Slurm job, stop), new (<name>_2...), overwrite or stop.
   if_exists: ask
   spectrum_axis: wavenumber
+  # Full width at half maximum of the bands of the spectra (cm-1), also used to find the bands
+  # of the selection of the excited states (selection.mode relevant).
+  spectrum_fwhm: 3000
   # Unit of the top axis: auto (nm, or cm-1 when the main axis is in nm), cm-1, eV, nm or none.
   spectrum_secondary_axis: auto
   # Range of the spectra, in the unit of spectrum_axis (e.g. [200, 600] in nm); omitted = automatic.
@@ -178,8 +181,13 @@ output:
       # Selection of the excited state is necessary when enabling
       # the output of the transitions and the electron_density_difference
       selection:
-        mode: dominant_only # dominant_only | first_n | all_states
-        first_n: 5 # required in mode first_n
+        # relevant: lowest states, states making the absorption and CD bands, triplets coupled
+        # to S1; dominant_only (former rule) | first_n | all_states
+        mode: relevant
+        band_share: 0.20 # smallest band, as a share of the largest of the same spectrum
+        max_selected_states: 15 # largest number of states shown (not of states computed)
+        states: [] # states always shown, e.g. [S4, T2]
+        # first_n: 5 # required in mode first_n
 
       # Disabling any of the outputs below will only hide them from the final report.
       # The data may still be computed as the transitions are needed for the electron_density_difference (EDD).
