@@ -439,10 +439,52 @@ def general_param_subsection(data_model: LogData, data_json, data, obdata):
     
     # TODO : 'integration grid' not found in data by cclib (is it because of version differences or just not present in all formats?)
     try_update_value(data_model, "comp_details.general.integration_grid", data_json, ['properties', 'integration grid'])
-    try_update_value(data_model, "comp_details.general.solvent", data.metadata, ['solvent'])
-    try_update_value(data_model, "comp_details.general.solvent_reaction_field", data.metadata, ['scrf'])
+    # Implicit solvent, as cclib reads it (metadata solvent_model, solvent_name, solvent_params).
+    # Until 27/11/2026 the keys 'solvent' and 'scrf' were read, which cclib does not write: the
+    # solvent never reached the report.
+    data_model.comp_details.general.solvent, data_model.comp_details.general.solvent_reaction_field = \
+        solvent_description(data.metadata)
     try_update_value(data_model, "comp_details.general.scf_targets", data_json, ['optimization', 'scf', 'targets'])
     try_update_value(data_model, "comp_details.general.core_electrons_per_atoms", data_json, ['atoms', 'core electrons'])
+
+
+def split_deexcitations(excited_states):
+    """Moves the de-excitation amplitudes (Y) of et_transitions to et_deexcitations.
+
+    cclib stores the de-excitations, when the log prints them (Gaussian with IOp(9/40), Q-Chem),
+    in etsecs with the orbitals reversed: from the virtual to the occupied orbital. They are
+    kept apart here, as (occupied, virtual, Y), so that et_transitions holds the excitations X
+    only, as all its users expect (density differences, NTO, table of the main excitations),
+    and the transition density can use X + Y (calc_orb.TD). An entry is a de-excitation when
+    it goes from a higher to a lower orbital of the same spin (the occupied orbitals of the
+    ground state come first)."""
+    transitions = excited_states.et_transitions
+    if not transitions:
+        return
+    kept, deexcitations = [], []
+    for state in transitions:
+        x, y = [], []
+        for start, end, c in state:
+            if start[1] == end[1] and start[0] > end[0]:
+                y.append((tuple(end), tuple(start), c))
+            else:
+                x.append((tuple(start), tuple(end), c))
+        kept.append(x)
+        deexcitations.append(y)
+    excited_states.et_transitions = kept
+    excited_states.et_deexcitations = deexcitations
+
+
+def solvent_description(metadata):
+    """(description, model) of the implicit solvent read by cclib: ("water (SMD-IEFPCM,
+    dielectric constant 78.36)", "SMD-IEFPCM"), or ("none (gas phase)", None)."""
+    model = metadata.get("solvent_model")
+    if not model:
+        return "none (gas phase)", None
+    name = metadata.get("solvent_name")
+    epsilon = (metadata.get("solvent_params") or {}).get("epsilon")
+    details = model + (f", dielectric constant {epsilon:.2f}" if epsilon is not None else "")
+    return f"{name or 'unnamed solvent'} ({details})", model
 
 
 def geometry_param_subsection(data_model: LogData, data_json, data, obdata):
@@ -549,6 +591,12 @@ def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata
     try:
         data_model.results.wavefunction.Hirshfeld_partial_charges = data.atomcharges["hirshfeld"].tolist()
     except:
+        pass
+    # CM5 charges (Gaussian pop=hirshfeld prints them with the Hirshfeld ones; ORCA has none).
+    # Not read before 27/11/2026, although the report has a CM5 column.
+    try:
+        data_model.results.wavefunction.CM5_partial_charges = data.atomcharges["cm5"].tolist()
+    except (AttributeError, KeyError):
         pass
 
 
@@ -705,6 +753,7 @@ def td_results_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "results.excited_states.et_oscs", data_json, ['transitions', 'oscillator strength'])
     try_update_value(data_model, "results.excited_states.et_sym",  data_json, ['transitions', 'symmetry'])
     try_update_value(data_model, "results.excited_states.et_transitions", data_json, ['transitions', 'one excited config'])
+    split_deexcitations(data_model.results.excited_states)
     
     # here NWChem
     try_update_value(data_model, "results.excited_states.et_rot", data_json, ['transitions', 'rotatory strength'])

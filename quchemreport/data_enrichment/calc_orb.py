@@ -281,33 +281,205 @@ def _density_difference_MOs(et_transitions):
    
     return MOs_alpha, MOs_beta
 
-def TD(data_model: LogData, transitions, grid_step=obk_step, nproc=4, verbose=False):
+# Smallest excitation amplitude |X| of the orbital pairs used for the Tozer Lambda (weight
+# 1 % with cclib's normalization; by default Gaussian prints |X| >= 0.1 before the sqrt(2) of
+# cclib, i.e. 0.14 here, and ORCA weights above 1 %): Lambda needs the two orbitals of
+# each pair on the grid, and a log printed with all the amplitudes (Gaussian IOp(9/40=4), about
+# 400 per state for HCFClBr) would need nearly every orbital (more than 10 minutes and 6 GB for
+# 10 states, 27/11/2026).
+EDD_MIN_AMPLITUDE = 0.1
+
+
+def edd_amplitudes(transitions):
+    """Main amplitudes of a state (for Lambda): |X| >= EDD_MIN_AMPLITUDE, or the largest one
+    when none reaches it."""
+    kept = [t for t in transitions if np.isfinite(t[2]) and abs(t[2]) >= EDD_MIN_AMPLITUDE]
+    finite = [t for t in transitions if np.isfinite(t[2])]
+    if not kept and finite:
+        kept = [max(finite, key=lambda t: abs(t[2]))]
+    return kept
+
+
+# Share of the total weight kept in the orbitals of the transition and difference densities
+# (the rest changes the dipoles, d_CT and q_CT by less than 0.1 %), and their largest number
+ORBITALS_KEPT = 1.0 - 1.0e-5
+ORBITALS_MAX = 20
+
+
+def _amplitude_matrices(transitions, deexcitations):
+    """Per spin: occupied and virtual orbital indexes and the matrices X and Y (occ x vir)."""
+    entries = {}
+    for kind, amplitudes in ((0, transitions), (1, deexcitations)):
+        for (i, si), (a, sa), c in amplitudes:
+            if si != sa or not np.isfinite(c):
+                continue
+            entries.setdefault(si, []).append((kind, i, a, float(c)))
+    matrices = {}
+    for spin, items in entries.items():
+        occ = sorted({i for _, i, _, _ in items})
+        vir = sorted({a for _, _, a, _ in items})
+        xy = np.zeros((2, len(occ), len(vir)))
+        for kind, i, a, c in items:
+            xy[kind, occ.index(i), vir.index(a)] += c
+        matrices[spin] = (occ, vir, xy[0], xy[1])
+    return matrices
+
+
+def _kept(values):
+    """Indexes of the largest values carrying ORBITALS_KEPT of their sum (at most ORBITALS_MAX)."""
+    order = np.argsort(-values)
+    total, kept, out = float(np.sum(values)), 0.0, []
+    for k in order:
+        if out and (kept >= ORBITALS_KEPT * total or len(out) >= ORBITALS_MAX):
+            break
+        out.append(int(k))
+        kept += float(values[k])
+    return out
+
+
+def transition_orbital_pairs(transitions, deexcitations, mo_coefficients, homos=None):
+    """Pairs (sigma, hole, electron) whose products sum to the transition density
+    sum_ia (X_ia + Y_ia) phi_i phi_a of one state, spin by spin: singular value decomposition
+    of the matrix X + Y (natural transition orbitals of the transition density), hole and
+    electron as AO coefficient rows. The pairs carrying ORBITALS_KEPT of sum sigma^2 are kept:
+    the transition density then needs 2 to 10 orbitals on the grid instead of all the orbitals
+    of the printed amplitudes (about 100 for HCFClBr with IOp(9/40=4))."""
+    candidates = []
+    for spin, (occ, vir, x, y) in _amplitude_matrices(transitions, deexcitations).items():
+        coefficients = np.asarray(mo_coefficients[min(spin, len(mo_coefficients) - 1)], dtype=float)
+        u, sigma, vh = np.linalg.svd(x + y, full_matrices=False)
+        for k, value in enumerate(sigma):
+            candidates.append((float(value), u[:, k] @ coefficients[occ], vh[k, :] @ coefficients[vir]))
+    if not candidates:
+        return []
+    keep = _kept(np.array([v * v for v, _, _ in candidates]))
+    return [candidates[k] for k in keep]
+
+
+def attachment_detachment(transitions, deexcitations, mo_coefficients):
+    """Orbitals (weight, AO coefficient row) of the attachment (electron) and detachment (hole)
+    densities of one state: eigenvectors of X^T X + Y^T Y among the virtual orbitals and of
+    X X^T + Y Y^T among the occupied ones (unrelaxed difference density of TD-DFT / TDA / CIS,
+    Head-Gordon 1995). The orbitals carrying ORBITALS_KEPT of each trace are kept."""
+    attach, detach = [], []
+    for spin, (occ, vir, x, y) in _amplitude_matrices(transitions, deexcitations).items():
+        coefficients = np.asarray(mo_coefficients[min(spin, len(mo_coefficients) - 1)], dtype=float)
+        for matrix, indexes, out in ((x.T @ x + y.T @ y, vir, attach), (x @ x.T + y @ y.T, occ, detach)):
+            w, v = np.linalg.eigh(matrix)
+            w = np.clip(w, 0.0, None)
+            for k in _kept(w):
+                if w[k] > 0:
+                    out.append((float(w[k]), v[:, k] @ coefficients[indexes]))
+    return attach, detach
+
+
+def _orbitals_on_grid(data_model, rows, X, grid_step, nproc):
+    """Orbitals given by AO coefficient rows, on the grid of the density differences."""
+    rows = [np.asarray(r, dtype=float) for r in rows]
+    if _use_qmckl():
+        wf = qmckl_backend.Wavefunction(data_model, nproc=nproc)
+        grids = wf.orbitals(np.array(rows), *wf.grid(grid_step))
+    else:
+        grids = []
+        for k in range(0, len(rows), 2):
+            pair = rows[k:k + 2] + rows[k:k + 1] * (2 - len(rows[k:k + 2]))
+            g, *_ = nto_pair(data_model, pair[0], pair[1], grid_step=grid_step, nproc=nproc)
+            grids.extend(g[:len(rows[k:k + 2])])
+        grids = np.array(grids)
+    if grids.shape[1:] != X.shape:
+        raise ValueError("The orbitals and the density differences are not on the same grid")
+    return grids
+
+
+def difference_density(data_model, transitions, deexcitations, X, grid_step, nproc):
+    """Unrelaxed density difference (excited minus ground state) of one state:
+    attachment - detachment (attachment_detachment), or None without signed amplitudes.
+
+    Why (27/11/2026, Thomas Cauchy): it was sum_j C_j^2 (phi_a^2 - phi_i^2), which leaves out
+    the cross terms between configurations sharing an orbital. Against the exact density from
+    all the amplitudes X and Y (Gaussian IOp(9/40=4), acetone and HCFClBr, 20 states), that
+    diagonal sum differed by 20 to 51 % (relative L2 norm of the map) on the states with several
+    configurations (HCFClBr S10, the bright state: 51 %; d_CT of acetone S5 100 pm instead of
+    65), whereas the exact formula applied to the amplitudes printed by default (X above 0.1)
+    stays within 15 % (d_CT 54 pm): the cross terms, not the missing amplitudes, made the error.
+    For a single configuration both formulas are the same."""
+    wavefunction = data_model.results.wavefunction
+    attach, detach = attachment_detachment(transitions, deexcitations, wavefunction.MO_coefs)
+    if not attach or not detach:
+        return None
+    grids = _orbitals_on_grid(data_model, [r for _, r in attach] + [r for _, r in detach], X, grid_step, nproc)
+    weights = np.array([w for w, _ in attach] + [-w for w, _ in detach])
+    return np.einsum("k,kxyz->xyz", weights, grids ** 2)
+
+
+def transition_density(data_model, transitions, deexcitations, X, grid_step, nproc):
+    """Transition density f sum_ia (X_ia + Y_ia) phi_i phi_a of one state on the grid of the
+    density differences (see TD and transition_orbital_pairs); f from transition_density_factor;
+    None without signed amplitudes (ORCA without TDA prints only the weights: cclib gives NaN)."""
+    wavefunction = data_model.results.wavefunction
+    pairs = transition_orbital_pairs(transitions, deexcitations, wavefunction.MO_coefs)
+    if not pairs:
+        return None
+    grids = _orbitals_on_grid(data_model, [h for _, h, _ in pairs] + [e for _, _, e in pairs], X, grid_step, nproc)
+    n = len(pairs)
+    rho = np.einsum("k,kxyz->xyz", np.array([v for v, _, _ in pairs]), grids[:n] * grids[n:])
+    return rho * transition_density_factor(transitions)
+
+
+def transition_density_factor(transitions):
+    """Factor of the transition density sum (X+Y) phi_i phi_a of a state: sqrt(2) for a
+    restricted singlet (cclib amplitudes normalized to sum X^2 - Y^2 = 1 for the spatial
+    excitation, shared by the alpha and beta spin orbitals), 1 with spin orbitals (unrestricted)."""
+    spins = {sub[k][1] for sub in transitions for k in (0, 1)}
+    return np.sqrt(2.0) if spins <= {0} else 1.0
+
+
+def TD(data_model: LogData, transitions, grid_step=obk_step, nproc=4, verbose=False, deexcitations=None):
     """Density differences and charge-transfer descriptors of excited states.
 
-    For each state, from its excitation amplitudes C_j (orbital i_j -> a_j):
-    the electron density difference sum_j C_j^2 (phi_a^2 - phi_i^2); the Tozer Lambda
-    index sum_j C_j^2 <|phi_a| |phi_i|>; the charge-transfer charge q_CT (integral of the
+    For each state, from its excitation amplitudes X (orbital i -> a) and de-excitation
+    amplitudes Y: the unrelaxed electron density difference, attachment minus detachment
+    (difference_density; the diagonal sum_j C_j^2 (phi_a^2 - phi_i^2) until 27/11/2026); the
+    Tozer Lambda index sum k^2 <|phi_a| |phi_i|> / sum k^2 (k = X + Y, main pairs, see
+    edd_amplitudes); the charge-transfer charge q_CT (integral of the
     positive part of the density difference), the distance d_CT between the barycentres of
     its positive and negative parts and the dipole mu_CT = q_CT d_CT (Le Bahers); and the
-    orbital overlap density sum_j C_j^2 phi_i phi_a with the barycentres of its signs.
+    transition density rho_T = f sum_ia (X_ia + Y_ia) phi_i phi_a (f: see
+    transition_density_factor), whose first moment is the transition dipole:
+    mu_0n = -integral r rho_T (electrons of charge -1), and |mu_0n|^2 gives the oscillator
+    strength f = 2/3 Delta E |mu_0n|^2.
+
+    Why (27/11/2026, Thomas Cauchy): until then the "overlap density" was
+    sum_j C_j^2 phi_i phi_a, and an arrow joined the barycentres of its two signs. The squares
+    lose the signs of the amplitudes, so that configurations that cancel (or add up) in the
+    transition dipole were added; on HCFClBr (no symmetry) the arrow was 3 to 53 degrees away
+    from the transition dipole printed by Gaussian (53 degrees for the bright state S10). With
+    the signed, linear sum and all the amplitudes X and Y (Gaussian IOp(9/40=4)), the dipoles
+    printed by Gaussian are found again within 1.4 degrees and 2 % on 20 states of acetone and
+    HCFClBr (validation/calculs_20261127/tdip). With the amplitudes printed by default (X above
+    0.1 only) the direction is within 3-38 degrees and the norm 2 to 8 times too large: the
+    report therefore draws the dipole of the log and says when the density is approximate.
 
     Parameters
     ----------
     data_model : LogData
         Model whose orbitals the amplitudes refer to.
     transitions : list
-        Excitation amplitudes of the states (cclib etsecs).
+        Excitation amplitudes X of the states (cclib etsecs without the de-excitations).
     grid_step : float, optional
     nproc : int, optional
     verbose : bool, optional
+    deexcitations : list, optional
+        De-excitation amplitudes Y of the states, (occupied, virtual, Y)
+        (scanlog.split_deexcitations); none when the log does not print them.
 
     Returns
     -------
     out : list
         For each state, None when the log has no amplitudes for it, otherwise
         ``(EDD, Lambda, (d_CT [pm], q_CT [e], mu_CT [D], barycentre +, barycentre -),
-        overlap density, (overlap barycentre +, overlap barycentre -))``; barycentres in
-        bohr.
+        transition density rho_T, (transition dipole [e.bohr], centre))``; barycentres and
+        centre (mean position weighted by |rho_T|) in bohr.
     X, Y, Z : numpy.ndarray or None
         Meshgrids of the points (bohr); None when no state has amplitudes.
     """
@@ -315,6 +487,10 @@ def TD(data_model: LogData, transitions, grid_step=obk_step, nproc=4, verbose=Fa
     ## To save time, the calculation is done in two phases:
 
     ## 1. Get all MOs involved in transitions and calculate them once
+    if deexcitations is None or len(deexcitations) != len(transitions):
+        deexcitations = [[] for _ in transitions]
+    all_transitions = transitions
+    transitions = [edd_amplitudes(t) for t in transitions]
     MO_list_alpha, MO_list_beta = _density_difference_MOs(transitions)
     # States without excitation amplitudes in the log give None (no EDD, Lambda, d_CT, q_CT)
     # (a pure beta excitation, as the emitting state of triplet O2, has no alpha orbital: the
@@ -334,85 +510,64 @@ def TD(data_model: LogData, transitions, grid_step=obk_step, nproc=4, verbose=Fa
     ## 2. Combine MOs according to info in `et_transitions`
     out = []
     for i, T in enumerate(transitions):
-        if len(T) == 0:
+        if len(all_transitions[i]) == 0:
             out.append(None)
             continue
-        vox_data = np.zeros(X.shape)
-        vox_Oif = np.zeros(X.shape)
-        tozer = 0
-        for j, subtrans in enumerate(T):
-            #print("Processing Subtransition: ", subtrans)
-            if verbose :
-                print("Calculating transition {}.{}".format(i, j))
-            elif i==0 and j==0:
-                print("Calculating transitions...")
-            ## Dp_i = S_j(C_ij**2*(MO2_ij**2 - MO1_ij**2))
-            #print("Starting MO is ", ST[0][0] , "and index in MOs after discretization " ,  MOs_alpha.index(ST[0][0]))
-            #print("Ending MO is ", ST[1][0] , "and index in MOs after discretization " ,  MOs_alpha.index(ST[1][0]))
-            # Test spin of starting  orbital
-            if subtrans[0][1] == 0:
-                # alpha orbital
-                MO_start = MOs_alpha[MO_list_alpha.index(subtrans[0][0])]
-            elif subtrans[0][1] == 1:
-                MO_start = MOs_beta[MO_list_beta.index(subtrans[0][0])]
-            else :
-                print("Unrecognised spin in TD transition")
-                # treat by default as alpha orbital
-                MO_start = MOs_alpha[MO_list_alpha.index(subtrans[0][0])]
-            # Test spin of ending orbital
-            if subtrans[1][1] == 0:
-                # alpha orbital
-                MO_end = MOs_alpha[MO_list_alpha.index(subtrans[1][0])]
-            elif subtrans[1][1] == 1:
-                MO_end = MOs_beta[MO_list_beta.index(subtrans[1][0])]
-            else :
-                print("Unrecognised spin in TD transition")
-                # treat by default as alpha orbital
-                MO_end = MOs_alpha[MO_list_alpha.index(subtrans[1][0])]
-            rho_end, rho_start = np.square(MO_end), np.square(MO_start)
-            #print("Coefficient is " , ST[2])
-            vox_data += subtrans[2]**2*(rho_end - rho_start)
+        if i == 0:
+            print("Calculating transitions...")
+        # Density difference: exact unrelaxed formula from all the printed amplitudes
+        vox_data = difference_density(data_model, all_transitions[i], deexcitations[i], X, grid_step, nproc)
+        if vox_data is None:
+            # no signed amplitude (ORCA without TDA prints only the weights)
+            out.append(None)
+            continue
 
-            ## For rationale of Electric dipole. 
-            # Let's keep the voxel data of overlap of S_j(C_ij**2*(MO_init *MO_final))
-            vox_Oif += subtrans[2]**2*(MO_start*MO_end)*d3r
+        # Tozer Lambda (Peach 2008): sum k^2 O_ia / sum k^2, k = X + Y, O_ia = integral |phi_i| |phi_a|,
+        # on the pairs of the main amplitudes (one orbital pair each, see edd_amplitudes)
+        kappa = {}
+        for start, end, c in T:
+            kappa[(tuple(start), tuple(end))] = kappa.get((tuple(start), tuple(end)), 0.0) + c
+        for start, end, c in deexcitations[i]:
+            if (tuple(start), tuple(end)) in kappa:
+                kappa[(tuple(start), tuple(end))] += c
+        overlap, norm = 0.0, 0.0
+        for (start, end), k in kappa.items():
+            phi_i = (MOs_beta[MO_list_beta.index(start[0])] if start[1] == 1
+                     else MOs_alpha[MO_list_alpha.index(start[0])])
+            phi_a = (MOs_beta[MO_list_beta.index(end[0])] if end[1] == 1
+                     else MOs_alpha[MO_list_alpha.index(end[0])])
+            overlap += k * k * np.sum(np.abs(phi_i) * np.abs(phi_a)) * d3r
+            norm += k * k
+        tozer = overlap / norm if norm > 0 else None
 
-            ## Tozer_i = S_j(C_ij**2*(|MO2_ij|*|MO1_ij|))
-            abs_MO_end, abs_MO_start = np.abs(MO_end), np.abs(MO_start)
-            tozer += subtrans[2]**2*np.sum(abs_MO_end*abs_MO_start)*d3r
-
-        # Separate positive P and negative voxels N and their respective positions
+        # Charge transfer (Le Bahers 2011): charge q_CT of the positive part, barycentres of the
+        # two parts. No half-voxel shift: the grids give the values at the points X, Y, Z (the
+        # former "+ dx/2" moved both barycentres by half a step).
         P_i, N_i = vox_data > 0.0, vox_data < 0.0
-        # positive Voxels DDp (negative DDn) in Mayavi form 
-        DDp, Xp, Yp, Zp = vox_data[P_i], X[P_i], Y[P_i], Z[P_i]
-        DDn, Xn, Yn, Zn = vox_data[N_i], X[N_i], Y[N_i], Z[N_i]
-        # Charge = sum of positive Voxels Qctp (negative Qctn) : quantity of charge transfer in e
+        DDp, DDn = vox_data[P_i], vox_data[N_i]
         Qctp, Qctn = np.sum(DDp)*d3r, np.sum(DDn)*d3r
-        # Calculation of the barycenter positions x = Sum(q_i*x_i)/Q. Mayavi center the voxel position. dx/2.0 realign with atomic coordinates
-        # Beware if atomic positions in Angstrom.  
-        Pp = np.array([np.sum(DDp*Xp)*d3r/Qctp + dx/2.0, np.sum(DDp*Yp)*d3r/Qctp + dy/2.0, np.sum(DDp*Zp)*d3r/Qctp + dz/2.0])
-        Pn = np.array([np.sum(DDn*Xn)*d3r/Qctn + dx/2.0, np.sum(DDn*Yn)*d3r/Qctn + dy/2.0, np.sum(DDn*Zn)*d3r/Qctn + dz/2.0])
-        # Charge transfer dipole norm in angstrom  
-        D = np.sqrt(np.sum(np.square(Pp - Pn)))
+        Pp = np.array([np.sum(DDp*G[P_i]) for G in (X, Y, Z)])*d3r/Qctp
+        Pn = np.array([np.sum(DDn*G[N_i]) for G in (X, Y, Z)])*d3r/Qctn
+        D = np.sqrt(np.sum(np.square(Pp - Pn)))       # bohr
         # Charge transfer dipole moment in Debye. D is in bohr (grid in bohr) and
         # units.ea0_to_D = 0.3934 is in fact D -> e.bohr, hence the division
         # (1 e.bohr = 2.5417 D).
         Mu = D*Qctp/ea0_to_D
-        
-        # transition phase dipole based on the overlap between intial and final wavefunctions
-        # Separate positive P and negative overlap voxels N and their respective positions
-        P_o, N_o = vox_Oif > 0.0, vox_Oif < 0.0
-        # positive Voxels Op (negative On) in Mayavi form 
-        Op, Xp, Yp, Zp = vox_Oif[P_o], X[P_o], Y[P_o], Z[P_o]
-        On, Xn, Yn, Zn = vox_Oif[N_o], X[N_o], Y[N_o], Z[N_o]
-        # Charge = sum of positive Voxels Qop (negative Qon) : quantity of overlap
-        Qop, Qon = np.sum(Op)*d3r, np.sum(On)*d3r
-        # Calculation of the barycenter positions x = Sum(q_i*x_i)/Q. Mayavi center the voxel position. dx/2.0 realign with atomic coordinates
-        # Beware if atomic positions in Angstrom.  
-        POp = np.array([np.sum(Op*Xp)*d3r/Qop + dx/2.0, np.sum(Op*Yp)*d3r/Qop + dy/2.0, np.sum(Op*Zp)*d3r/Qop + dz/2.0])
-        POn = np.array([np.sum(On*Xn)*d3r/Qon + dx/2.0, np.sum(On*Yn)*d3r/Qon + dy/2.0, np.sum(On*Zn)*d3r/Qon + dz/2.0])
-              
-        out += [(vox_data, tozer, (D*a0_to_pm, Qctp, Mu, Pp, Pn), vox_Oif, (POp, POn) )]
+
+        # Transition density: signed, linear sum over the orbital pairs of X + Y, all the
+        # printed amplitudes
+        rho_T = transition_density(data_model, all_transitions[i], deexcitations[i], X, grid_step, nproc)
+        if rho_T is None:
+            out += [(vox_data, tozer, (D*a0_to_pm, Qctp, Mu, Pp, Pn), None, None)]
+            continue
+        # Transition dipole (e.bohr): first moment of -rho_T (electrons)
+        mu = -np.array([np.sum(rho_T * X), np.sum(rho_T * Y), np.sum(rho_T * Z)]) * d3r
+        weight = np.abs(rho_T)
+        total = np.sum(weight)
+        centre = (np.array([np.sum(weight * X), np.sum(weight * Y), np.sum(weight * Z)]) / total
+                  if total > 0 else np.zeros(3))
+
+        out += [(vox_data, tozer, (D*a0_to_pm, Qctp, Mu, Pp, Pn), rho_T, (mu, centre))]
 
     return out, X, Y, Z
 

@@ -85,6 +85,7 @@ output:
     EDD:   {positive: "#008080", negative: "#FFEBDC"}  # blue / cream: excited electron / hole
     fukui: {positive: "#008080", negative: "#FFEBDC"}  # blue / cream: F+, F- and dual descriptor
     NTO:   {positive: "#5B6A8F", negative: "#FFEBDC"}  # blue-grey / cream: orbital phases
+    transition_density: {positive: "#F28000", negative: "#FFEBDC"}  # orange / cream: signs of the transition density
   # Specular reflections (white highlights, glossy look) of the atoms, bonds and iso-surfaces:
   # intensity 0-1, 0 = diffuse light only. Default 0.5. Not applied to the MEP surface.
   specular: 0.5

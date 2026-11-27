@@ -45,7 +45,9 @@ of the reference):
 - Triplets: `td=(triplets,nstates=10)`.
 - Excited state optimization: `td=(nstates=10,root=1) opt geom=check guess=read`, starting
   from the TD checkpoint; give `excited_state_number: 1` in the YAML file.
-- More excitation amplitudes (better NTO): add `IOp(9/40=4)` to the TD route.
+- All the excitation and de-excitation amplitudes (exact transition densities, better NTO):
+  add `IOp(9/40=4)` to the TD route. The log is larger (about 400 amplitudes per state for a
+  five-atom molecule in 6-31G(d)); the report time hardly changes.
 - Empirical dispersion (`EmpiricalDispersion=GD3BJ`...) must be the same in all the
   calculations.
 
@@ -72,6 +74,8 @@ calculations share it:
 
 - Optimization and frequencies can be one job: `! PBE0 def2-SVP Opt Freq` (YAML type
   `[opt, freq]`).
+- All the excitation amplitudes (exact transition densities with the default TDA, better
+  NTO): `tprint 1e-6` in `%tddft`.
 - Triplets: `triplets true` in `%tddft`; excited state optimization: `iroot 1` (and
   `irootmult triplet` for T1) with `Opt`.
 - Spin-orbit coupling (SOC): `dosoc true` in `%tddft` (it implies the triplets). In a TD

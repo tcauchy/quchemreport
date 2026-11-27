@@ -6,13 +6,20 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
 
 ## Sections
 
-1. **Log files**: the calculations, their types, the reference, and **warnings** on the
-   structures (optimization not converged, imaginary frequencies: not a minimum).
-2. **Molecule**: picture with the atom numbers, identification (formula, charge,
-   multiplicity, mass, InChI, SMILES), coordinates of the reference (for molecules of fewer
-   than 15 atoms; the others are at the end), with the calculations done at the same geometry.
+1. **Molecule**: picture with the atom numbers, identification (formula, mass, InChI,
+   SMILES).
+2. **Log files**: one table of the calculations grouped by kind, in the order of a study
+   (ground-state optimization, frequencies, vertical excited states, single points,
+   excited-state optimizations), with the charge and multiplicity of each log, its geometry
+   (optimized, or "of OPT.log" for a calculation at the geometry of an optimization) and the
+   states (number of singlets/triplets of a TD, optimized state S1/T1); the reference is
+   marked. Then **warnings** on the structures (optimization not converged, imaginary
+   frequencies: not a minimum).
 3. **Computational details**: program and versions, method, functional with its dispersion
-   correction (e.g. `B3LYP + D3(BJ)`), basis set, solvent, convergence criteria. A value that
+   correction (e.g. `B3LYP + D3(BJ)`), basis set, implicit solvent (model, solvent and
+   dielectric constant, e.g. `water (SMD-IEFPCM, dielectric constant 78.36)`, or "none (gas
+   phase)"), convergence criteria (restricted or unrestricted: see the energy table of section
+   4). A value that
    differs between calculations is given with the log files concerned. A second table gives
    what is specific to each log file: convergence of the optimization (with the thresholds
    once when they are the same), nuclear repulsion energy, temperature, excited states read.
@@ -20,7 +27,9 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
    orbitals (one row per group of identical calculations, alpha and beta rows for unrestricted
    ones); orbital pictures;
    molecular electrostatic potential (MEP) with its extrema; atoms whose charge deviates by
-   more than one standard deviation from the mean.
+   more than one standard deviation from the mean, for each charge model in the log: Mulliken,
+   Hirshfeld and CM5 (Gaussian `pop=hirshfeld` prints both; ORCA `! Hirshfeld` gives
+   Hirshfeld, ORCA has no CM5).
 5. **Frequencies**: thermochemistry (zero-point, thermal, enthalpy, free energy, entropy) and
    IR vibrations more intense than 50 km/mol (otherwise a sentence: no IR-active vibration, as
    for O2, or the most intense one).
@@ -28,10 +37,12 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
    potential I = E(N-1) - E(N), electronegativity (I + A)/2, hardness I - A,
    electrophilicity, DeltaN, in eV), condensed Fukui functions (Mulliken and Hirshfeld
    charges; every atom up to 20 atoms, otherwise the atoms whose dual descriptor departs from
-   the mean by more than one standard deviation) and 3D Fukui functions and dual descriptor.
+   the mean by more than one standard deviation) and 3D Fukui functions and dual descriptor,
+   side by side in one figure.
 7. **Excited states**: table of the selected states (S<n>/T<n>, with the rank of the state in
    the log when singlets and triplets are mixed; spatial symmetry; wavelength, wavenumber,
-   oscillator and rotatory strengths; Lambda, d_CT in pm, q_CT in e; main excitations in %
+   oscillator and rotatory strengths, R in the length and velocity gauges when the log gives the
+   velocity and magnetic transition dipoles (Gaussian); Lambda, d_CT in pm, q_CT in e; main excitations in %
    named from the HOMO and LUMO, e.g. H-1->L), absorption and CD spectra (Gaussian bands,
    3000 cm-1 wide; main axis in wavenumber or wavelength, `output.spectrum_axis`; range: every
    computed band with three widths on each side, or `output.spectrum_range`), density
@@ -43,10 +54,16 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
    spin-flip TD-DFT or a separate singlet calculation.
    With ORCA and `dosoc true`: spin-orbit coupling matrix elements and Jablonski diagram
    (see below).
-8. **Optimized excited states**: emitting state, emission and CPL spectra, density difference.
+8. **Optimized excited states**: emitting state, emission and CPL spectra, density difference
+   drawn for the emission (see below).
    For a triplet optimized with `dosoc true` (ORCA): phosphorescence (see below).
-9. **Other topologies** and **atomic coordinates** of the geometries that differ from the
-   reference (optimized ions or excited states); calculations at the same geometry share a table.
+9. **Other topologies** and **atomic coordinates** in pm: the reference first, then the
+   geometries that differ from it (optimized ions or excited states); calculations at the same
+   geometry share a table. All lengths of the report are in pm (coordinates, MEP extremum to
+   nearest atom, d_CT).
+
+In the tables, the first column is aligned as before and the other columns are centred; the
+two-column lists (molecule identification, computational details) stay left-aligned.
 
 ## Reading the pictures
 
@@ -54,7 +71,11 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
 on the orientation written by the program: the atoms are spread as much as possible, with few
 atoms hiding each other; heteroatoms are put in front; flat molecules are seen face-on, slightly
 tilted; the long axis is horizontal. All the pictures use the same view, so that the atom numbers
-of the molecule picture can be followed on the orbitals, the MEP or the density differences. A
+of the molecule picture can be followed on the orbitals, the MEP or the density differences. The
+other geometries of the molecule (optimized excited states, ions) are first superimposed on the
+reference, so that they are seen from the same side even when the program wrote them in another
+orientation. In the report the white border of the pictures is cut (the same for all the
+pictures of a grid); the picture files themselves are kept whole. A
 second picture, at about 90 degrees, is added only when one view is not enough: rings facing
 each other (pi-stacking, helicenes, spiro compounds, folded molecules), rings seen edge-on in
 the first view, or a globular molecule. `output.camera_views: 1` or `2` in the YAML file removes
@@ -77,6 +98,59 @@ one orbital in the picture plane and the other pointing at the camera.
 **Density differences** (excited state minus ground state): blue where the excited electron
 goes, cream for the hole; each surface encloses 30 % of the density gained or lost. Two states
 with the same single excitation (e.g. S1 and T1, both HOMO->LUMO) therefore give the same picture.
+They are the unrelaxed density differences of the amplitudes printed in the log, X and Y:
+attachment minus detachment densities, which keep the cross terms between configurations sharing
+an orbital (until November 2026 the diagonal sum C^2 (phi_a^2 - phi_i^2) left them out, up to
+50 % of the map off for the mixed states of HCFClBr). When the printed amplitudes of a state are
+incomplete (sum X^2 below 0.99), the report says that its density difference, d_CT and q_CT are
+approximate: up to about 20 % of the map and 35 pm of d_CT on acetone and HCFClBr; print all
+the amplitudes (`IOp(9/40=4)`) for exact ones.
+The density differences of the optimized excited states are drawn for the emission (ground
+state minus excited state, at the excited-state geometry): blue where the electron goes back to
+when the molecule returns to the ground state, cream where it comes from, so the colours are
+the reverse of an absorption picture of the same transition.
+
+**Transition densities** (with the density differences): for each selected singlet state
+(each state of an unrestricted calculation), two pictures side by side: the charge transition
+density, orange where it is positive and cream where it is negative (30 % of each sign), and
+the transition dipole as a blue arrow through its centre, from the cream to the orange regions
+(1 e.bohr = 4 bohr), or a blue sphere for a forbidden transition. The arrows have a constant
+thickness and a length proportional to the dipole, on a thinner skeleton, so that a short arrow or
+one lying along a bond stays visible; there is no minimum length, but the values are written in
+the upper left corner of the picture (|mu| in e.a0, |m| in Bohr magnetons), with ⊙ / ⊗ for an
+arrow pointing towards / away from the viewer (within 30 degrees of the line of sight). In that
+case the state is shown from a second point of view too, turned by the smallest angle (45 to 90
+degrees) that puts every arrow at least 45 degrees from the line of sight. For a chiral molecule
+(non-zero rotatory strengths) the magnetic transition dipole is drawn too, in magenta, oriented
+so that the rotatory strength is positive when the two arrows make an acute angle (as the E-M
+angle of Gaussian). One Bohr magneton is drawn as 4 bohr, like 1 e.bohr: since 1 Bohr magneton
+= alpha/2 e.bohr in common units, the magnetic arrow is magnified 2/alpha = 274 times, and the
+picture is quantitative: g = 4R/D = (4/274) x (projection of the magenta arrow on the blue one) /
+(length of the blue one). The label of each chiral state gives f and g (from R(length)); the
+rotatory strengths are in the table of the excited states (2 decimals, both gauges). m and
+R(length) depend on the origin of the program, R(velocity) does not; when the two gauges give
+opposite signs the label says "sign uncertain" after g. R(velocity)
+is computed from the velocity and magnetic transition dipoles printed by the program (cclib reads
+only R(length)), within 0.04 of the printed value for Gaussian and 0.01 for ORCA; for ORCA, cclib
+needs the branch orca-magnetic-dipoles (velocity and magnetic dipoles; otherwise no magenta arrow
+and no R(velocity)). With the Tamm-Dancoff approximation (TDA, the default of ORCA) the two gauges
+can disagree strongly (HCFClBr: 3 states of 10 with opposite signs, S1 0.05 against 9.32), which the
+"sign uncertain" mark shows; full TD-DFT (`tda false`) agrees much better, but ORCA then prints
+only the weights of the excitations, hence no transition density pictures. The
+transition dipole is the first moment of this density, and its square gives the oscillator
+strength, f = 2/3 Delta E |mu|^2: a bright state has large regions of opposite signs on either
+side of the molecule; a forbidden one has no arrow, the dipoles of its regions cancelling (e.g.
+the n->pi* state of a ketone). The density is sum (X + Y) phi_i phi_a over the excitation (X)
+and de-excitation (Y) amplitudes of the log; the arrow is the transition dipole printed in the
+log (Gaussian, ORCA), and the density is given the sign that matches it (the sign of a
+transition density is arbitrary). By default the programs print only the amplitudes X above
+0.1 and no Y: the shape is then approximate, and the report lists the states whose density
+gives a dipole more than 35 % away from that of the log. With Gaussian, `IOp(9/40=4)` in the TD
+route prints all the amplitudes, X and Y, and the densities are exact (dipoles of the log found
+within 2 %); with ORCA (TDA by default: no Y), `tprint 1e-6` in `%tddft`. The same picture is
+drawn for the emitting state of an optimized excited state. The restricted triplets have no
+charge transition density (spin-forbidden). Lambda uses the pairs of the main amplitudes
+(|X| above 0.1 after cclib's normalization) with k = X + Y, normalized as in Peach et al.
 
 **Natural transition orbitals** (option `natural_transition_orbitals.enabled`): for each
 selected state, the hole and electron orbitals of its main pairs, blue-grey and cream for
@@ -98,7 +172,8 @@ the states gives the charge-transfer indices: Tozer's Lambda (overlap of the orb
 low for a charge transfer), the distance d_CT between the barycentres of the density increase
 and decrease (pm) and the transferred charge q_CT (e).
 
-**Fukui functions**: blue regions are the most electrophilic (F+) or nucleophilic (F-) sites;
+**Fukui functions**: F+, F- and the dual descriptor side by side (one row each with two
+points of view). Blue regions are the most electrophilic (F+) or nucleophilic (F-) sites;
 dual descriptor: blue electrophilic, cream nucleophilic.
 
 **Molecular electrostatic potential.** The MEP is mapped on the 0.001 e-/bohr3 electron density

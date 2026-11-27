@@ -113,6 +113,7 @@ omitted colour keeps its default:
 | `EDD` | `"#008080"` blue: density gained (excited electron); also the charge-transfer dipole arrow | `"#FFEBDC"` cream: density lost (hole) |
 | `fukui` | `"#008080"` blue: F+ (electrophilic), F- (nucleophilic), dual descriptor (electrophilic) | `"#FFEBDC"` cream: dual descriptor (nucleophilic) |
 | `NTO` | `"#5B6A8F"` blue-grey: one phase of the hole and electron orbitals | `"#FFEBDC"` cream: the other phase |
+| `transition_density` | `"#F28000"` orange: positive charge transition density | `"#FFEBDC"` cream: negative charge transition density (the transition dipole goes from cream to orange) |
 
 ```yaml
 output:

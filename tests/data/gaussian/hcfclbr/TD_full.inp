@@ -1,0 +1,9 @@
+%Chk=hcfclbr_TDfull
+%NProcShared=6
+%mem=2GB
+#p PBE1PBE/6-31G(d) pop=full gfprint td=(nstates=10) IOp(9/40=4) geom=check guess=read
+
+TD HCFClBr
+
+0 1
+

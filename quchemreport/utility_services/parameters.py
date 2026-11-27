@@ -36,22 +36,14 @@ img_height = 1200
 # isosurface opacity
 surf_opacity = 1
 
-# MO, EDD, Fukui and NTO surfaces: surface_colors below
-colors = {"Oif" : (0.95, 0.5, 0.0),  #For transitions wavefunctions overlap positive surface an orange
-          "NEG" : (0.95, 0.90, 0.93),  #For the negative Oif surface, almost white
-          "CTDIP" : (0.0, 0.5, 0.5), #Charge transfer dipole: the EDD gain colour (set_surface_colors)
+# Colours of the dipole arrows (visu_mayavi.viz_dip, viz_TDEN); the iso-surfaces use
+# surface_colors below. Their lengths: visu_mayavi.BOHR_PER_DEBYE. The overlap surface and
+# arrow (Oif, OVDIP) were removed on 27/11/2026 (replaced by the transition density).
+colors = {"CTDIP" : (0.0, 0.5, 0.5), #Charge transfer dipole: the EDD gain colour (set_surface_colors)
           "GSDIP" : (0.1, 0.1, 0.1),
           "ELDIP" : (0, 0.6, 1),
           "VELDIP" : (0.6, 1, 0.2),
           "MAGDIP" : (1, 0.2, 0.6),
-          "OVDIP" : (0.95, 0.5, 0.) #For transitions wavefunctions overlap dipole same as Oif surface 
-          }
-scale = {"CTDIP" : 1., #For transitions charge transfer dipole same as EDD surface
-          "GSDIP" : 1.,
-          "ELDIP" : 1./units.a0_to_A,
-          "VELDIP" : 1./units.a0_to_A,
-          "MAGDIP" : 1./units.a0_to_A,
-          "OVDIP" : 1. #For transitions wavefunctions overlap dipole same as Oif surface 
           }
 
 # Colours of the iso-surfaces of the 3D pictures, positive and negative parts, as "#RRGGBB";
@@ -80,6 +72,9 @@ DEFAULT_SURFACE_COLORS = {
     "EDD":   {"positive": ("#008080", "blue"),   "negative": ("#FFEBDC", "cream")},
     "fukui": {"positive": ("#008080", "blue"),   "negative": ("#FFEBDC", "cream")},
     "NTO":   {"positive": ("#5B6A8F", "blue-grey"), "negative": ("#FFEBDC", "cream")},
+    # charge transition density (compute.transition_dipole): the orange of the former overlap
+    # pictures (Oif), with the cream of the other negative surfaces
+    "transition_density": {"positive": ("#F28000", "orange"), "negative": ("#FFEBDC", "cream")},
 }
 
 

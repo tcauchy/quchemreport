@@ -452,20 +452,21 @@ def output_es_EDD_OIF_DIP(computed_data: ComputedData):
                 file_name=output_dir+"img"+f"-log{log_idx + 1}", labels=[state_number(et_sym, k)]
             ) 
             
-            if (len(et_rotats) > 0) and (abs(et_rotats[k]) > 10.):
-                    #calculate only the elect and magnetic dipole for chiral compounds
-                    print("Generating overlap image for the selected transition:", k+1)
-                    visu_mayavi.viz_Oif([TD_output[k][3]],
-                    grid_X,
-                    grid_Y,
-                    grid_Z,
-                    elements_3D_coords,
-                    atom_pairs,
-                    atoms_Z,
-                    et_sym[k],
-                    file_name=output_dir+"img"+f"-log{log_idx + 1}", labels=[state_number(et_sym, k)]
-                )            
-
+            # Transition density with its transition dipole (every allowed state; the overlap
+            # picture Oif it replaces was only drawn for chiral molecules)
+            tdms = computed_data.derived.excited_states.transition_dipoles[log_idx]
+            tdm = tdms[k] if tdms is not None else None
+            if tdm is not None:
+                print("Transition density visualization in progress for the transition:", k+1)
+                visu_mayavi.viz_TDEN([TD_output[k][3]], grid_X, grid_Y, grid_Z,
+                                     elements_3D_coords, atom_pairs, atoms_Z, et_sym[k],
+                                     file_name=output_dir + "img" + f"-log{log_idx + 1}",
+                                     labels=[state_number(et_sym, k)],
+                                     vectors=[tdm["dipole"], tdm.get("magnetic")])
+                visu_mayavi.viz_TDIP(elements_3D_coords, atom_pairs, atoms_Z, et_sym[k], tdm["dipole"],
+                                     tdm["centre"], magnetic=tdm.get("magnetic"),
+                                     file_name=output_dir + "img" + f"-log{log_idx + 1}",
+                                     label=state_number(et_sym, k))
             data_dip = all_data_dip[k]
             if data_dip is not None:
                 print("Generating transition dipole images for selected transition:", k+1),
@@ -643,8 +644,14 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
         else:
             emi_rotat = 0.0
         
-        # Using TD_output[0] instead of the index of the transition as TD_output only contain the transition of index emi_index here
-        discretized_EDD_voxels = [TD_output[0][0]]
+        # Using TD_output[0] instead of the index of the transition as TD_output only contain the transition of index emi_index here.
+        # Emission goes from the excited state to the ground state: the electron moves back from
+        # the arrival region of the absorption (rho_excited - rho_ground > 0) to its departure
+        # region. The density difference is drawn as rho_ground - rho_excited, so that the
+        # positive surface is where the electron arrives in the emission, as for the absorption.
+        # Why (27/11/2026, Thomas Cauchy): with the sign of the absorption, the pictures had to
+        # be read backwards to interpret the emission.
+        discretized_EDD_voxels = [-TD_output[0][0]]
         
         # file img-log<i+1>-emi-EDD-S<n>.png (T<n> for a triplet, <n> for other states), as in the report
         print(f"Optimized Excited State EDD visualization in progress for the state {emi_state}")
@@ -660,9 +667,26 @@ def output_optimized_es_EDD_DIP(computed_data: ComputedData, config: Config):
             file_name=output_dir+f"img-log{log_idx + 1}-emi", labels=[state_number(et_sym, emi_index)]
         ) 
         
+        tdms = computed_data.derived.optimized_excited_states.transition_dipoles[log_idx]
+        tdm = tdms[emi_index] if tdms is not None else None
+        if tdm is not None:
+            # The sign of a transition density is arbitrary: the same picture serves the
+            # absorption and the emission (no reversal, unlike the density difference)
+            visu_mayavi.viz_TDEN([TD_output[0][3]], grid_X, grid_Y, grid_Z,
+                                 elements_3D_coords, atom_pairs, atoms_Z, et_sym[emi_index],
+                                 file_name=output_dir + f"img-log{log_idx + 1}-emi",
+                                 labels=[state_number(et_sym, emi_index)],
+                                 vectors=[tdm["dipole"], tdm.get("magnetic")])
+            visu_mayavi.viz_TDIP(elements_3D_coords, atom_pairs, atoms_Z, et_sym[emi_index], tdm["dipole"],
+                                 tdm["centre"], magnetic=tdm.get("magnetic"),
+                                 file_name=output_dir + f"img-log{log_idx + 1}-emi",
+                                 label=state_number(et_sym, emi_index))
+
         if (emi_rotat != 0.0):
             data_dip = all_data_dip[emi_index]
             if data_dip is not None:
+                # charge-transfer arrow reversed as the density difference (emission)
+                data_dip = {k: ((v[1], v[0]) if k == "CTDIP" else v) for k, v in data_dip.items()}
                 visu_mayavi.viz_dip(
                     data_dip,
                     elements_3D_coords,
@@ -731,7 +755,14 @@ def generate_visualization(computed_data: ComputedData, config: Config, compute_
     print("\n=================================================================")
     print(" Visualization")
     print("=================================================================")
-    
+
+    # Every geometry of the molecule is seen from the side chosen for the reference
+    ref_id = computed_data.metadata.ref_log_file_idx
+    if ref_id is not None:
+        visu_mayavi.set_reference_geometry(computed_data.results.geometry.elements_3D_coords[ref_id],
+                                           computed_data.molecule.connectivity.atom_pairs[ref_id],
+                                           computed_data.molecule.atoms_Z[ref_id])
+
     # Generate molecule representation
     if compute_flags.compute_molecule_representations:
         output_molecule_representations(computed_data)

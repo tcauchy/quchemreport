@@ -1,0 +1,20 @@
+# Chiral HCFClBr, PBE0/def2-SVP, TDA with all the amplitudes printed (tprint 1e-6): velocity and magnetic
+# transition dipoles and both rotatory strengths, for the transition dipole pictures (27/11/2026)
+! PBE0 def2-SVP NoUseSym
+%pal nprocs 2 end
+%output
+ Print[ P_Basis ] 2
+ Print[ P_MOs ] 1
+end
+%tddft
+ nroots 10
+ tda true
+ tprint 1e-6
+end
+* xyz 0 1
+C 0.571707 0.464752 0.411832
+H 0.608717 0.591565 1.492078
+F 0.776140 1.635581 -0.203483
+Cl 1.823971 -0.682887 -0.067276
+Br -1.200906 -0.185464 -0.028229
+*

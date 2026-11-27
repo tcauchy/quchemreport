@@ -39,6 +39,7 @@ from quchemreport.utility_services.log_data import LogData
 from quchemreport.utility_services.validated_data import ValidatedData
 from quchemreport.utility_services.parameters import FWHM, obk_step
 from quchemreport.utility_services.units import a0_to_A
+from quchemreport.utility_services.naming import spin_letter
 from quchemreport.utility_services.naming import spin_letter, state_number
 
 # Number of processes/threads for the grid computations; replaced by
@@ -279,6 +280,7 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
         computed_data.results.excited_states.et_oscs[i] = log.results.excited_states.et_oscs
         computed_data.results.excited_states.et_rot[i] = log.results.excited_states.et_rot
         computed_data.results.excited_states.et_transitions[i] = log.results.excited_states.et_transitions
+        computed_data.results.excited_states.et_deexcitations[i] = log.results.excited_states.et_deexcitations
         computed_data.results.excited_states.soc[i] = log.results.excited_states.soc
         
         # Extract Wavefunction Results
@@ -429,6 +431,136 @@ def _view_and_centre(ref_data):
     view = camera.choose_views(coords, ref_data.molecule.atoms_Z, ref_data.molecule.connectivity.atom_pairs)[0]
     return view.direction, coords.mean(axis=0) / a0_to_A, view.up
 
+
+
+# Relative deviation |mu(grid) - mu(log)| / max(|mu(log)|, 0.1 au) beyond which the transition
+# density drawn from the printed amplitudes is said to be approximate (20 degrees give 0.35).
+# Measured 27/11/2026 (validation/calculs_20261127/tdip): all the amplitudes X and Y
+# (Gaussian IOp(9/40=4)) give 0.01-0.03; the default printing (X above 0.1) gives 1 to 7 on
+# the bright states of acetone and HCFClBr, mostly by the missing Y amplitudes (TD-DFT).
+TRANSITION_DIPOLE_TOLERANCE = 0.35
+# Below this norm (e.bohr) the transition is taken as forbidden: no arrow
+FORBIDDEN_DIPOLE = 1.0e-3
+
+
+# A molecule is taken as chiral (magnetic transition dipoles drawn) when one of its states has
+# a rotatory strength above this (10^-40 cgs; Gaussian prints 0.0000 for achiral molecules)
+CHIRAL_ROTATORY_STRENGTH = 1.0e-3
+
+
+def is_chiral(rotatory_strengths):
+    """Whether the rotatory strengths of a log show a chiral molecule."""
+    values = [abs(r) for r in (rotatory_strengths or []) if r is not None and np.isfinite(r)]
+    return bool(values) and max(values) > CHIRAL_ROTATORY_STRENGTH
+
+
+# Units of the rotatory strengths (cgs, as printed by Gaussian and ORCA: 10^-40 erg.esu.cm/G):
+# e.bohr = 2.541746e-18 esu.cm and Bohr magneton = 9.2740101e-21 erg/G, so that a transition
+# dipole of 1 e.bohr parallel to a magnetic one of 1 Bohr magneton gives R = 235.72 (the factor of
+# Gaussian's "R(length) = -235.7 mu.m"), and D = |mu|^2 = 1 (e.bohr)^2 gives 64604.7.
+EBOHR_CGS = 2.541746e-18
+BOHR_MAGNETON_CGS = 9.2740101e-21
+ROTATORY_UNIT = EBOHR_CGS * BOHR_MAGNETON_CGS * 1e40
+DIPOLE_STRENGTH_UNIT = EBOHR_CGS ** 2 * 1e40
+CM_TO_HARTREE = 1.0 / 219474.6313705
+
+
+def rotatory_strengths_velocity(energies_cm, veldips, magdips):
+    """Rotatory strengths in the velocity gauge (10^-40 cgs), R = ROTATORY_UNIT p.m / E, from the
+    velocity transition dipoles p = <0|del|n> and the magnetic ones m (a.u., as cclib reads them,
+    etveldips and etmagdips), and the energies E (cm-1, converted to hartree); None without them
+    (cclib reads neither from ORCA).
+
+    Why (27/11/2026, Thomas Cauchy): reviewers ask for both gauges. R(length) depends on the
+    origin of the program, R(velocity) does not; their agreement tells whether the sign of R is
+    reliable. cclib reads R(length) only (etrotats), but the velocity and magnetic dipoles it
+    reads give R(velocity): on HCFClBr (10 states, TD-PBE0/6-31G(d)) the values printed by Gaussian
+    are found to 0.034 at most, the rounding of the printed vectors (4 decimals; S3 21.607 for
+    21.641 printed, S10 34.983 for 34.982, S1 -0.548 for -0.565), with the same sign for every
+    state. A new cclib attribute was not needed. ORCA prints the same vectors (magnetic ones in
+    atomic units, e hbar / m_e = 2 Bohr magnetons): with the cclib branch orca-magnetic-dipoles,
+    which stores them in Bohr magnetons, the R(velocity) printed by ORCA is found to 0.002 (HCFClBr,
+    TDA, 10 states)."""
+    if energies_cm is None or veldips is None or magdips is None:
+        return None
+    n = min(len(energies_cm), len(veldips), len(magdips))
+    if n == 0 or n != len(energies_cm):
+        return None
+    values = []
+    for e, p, m in zip(energies_cm[:n], veldips[:n], magdips[:n]):
+        p, m = np.asarray(p, dtype=float), np.asarray(m, dtype=float)
+        if e is None or e <= 0 or not (np.all(np.isfinite(p)) and np.all(np.isfinite(m))):
+            values.append(None)
+            continue
+        values.append(float(ROTATORY_UNIT * (p @ m) / (e * CM_TO_HARTREE)))
+    return values
+
+
+def dissymmetry_factor(rotatory_strength, dipole):
+    """Dissymmetry (Kuhn) factor g = 4 R / D of a transition, from its rotatory strength
+    (10^-40 cgs) and its electric transition dipole (e.bohr, D = |mu|^2); None when either is
+    missing or the transition is forbidden."""
+    if rotatory_strength is None or dipole is None:
+        return None
+    d = float(np.dot(dipole, dipole)) * DIPOLE_STRENGTH_UNIT
+    if d <= 0 or not np.isfinite(rotatory_strength):
+        return None
+    return 4.0 * rotatory_strength / d
+
+
+def dipole_angle(dipole, magnetic):
+    """Angle (degrees) between the electric transition dipole and the magnetic one as drawn
+    (compute.transition_dipole: acute for R > 0); None when either is missing or zero."""
+    if dipole is None or magnetic is None:
+        return None
+    a, b = np.asarray(dipole, dtype=float), np.asarray(magnetic, dtype=float)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na < 1e-12 or nb < 1e-12:
+        return None
+    return float(np.degrees(np.arccos(np.clip(a @ b / (na * nb), -1.0, 1.0))))
+
+
+def transition_dipole(td_entry, log_dipole, symmetry, transitions, magnetic=None):
+    """Transition density and dipole of one state, from an entry of calc_orb.TD.
+
+    Turns the transition density of the entry, in place, into the charge transition density
+    -rho_T (electrons of charge -1), with the phase that makes its dipole parallel to the
+    dipole printed in the log: the arrow then goes from the negative to the positive regions
+    of the picture. The sign of a transition density is arbitrary (phase of the state).
+
+    Returns None for a spin-forbidden state of a restricted calculation (triplet: no charge
+    transition density) or without signed amplitudes (ORCA without TDA prints only the
+    weights), otherwise a dict: dipole (e.bohr, of the log when it prints one,
+    else from the grid; None when forbidden), grid (dipole from the amplitudes), source
+    ("log" or "grid"), deviation (see TRANSITION_DIPOLE_TOLERANCE, None without a log dipole),
+    centre (bohr, mean position weighted by |rho_T|), magnetic (the magnetic transition dipole
+    of the log, a.u., for a chiral molecule; else None).
+
+    The magnetic dipole is given with the opposite sign of the one printed by Gaussian: the
+    rotatory strength R(length) of Gaussian is -235.7 mu.m with the printed vectors (HCFClBr,
+    10 states), so with -m an acute angle between the arrows means R > 0, as the "E-M Angle" of
+    Gaussian. It is drawn when the phase of the state is that of the log (dipole of the log)."""
+    rho_T = td_entry[3]
+    if rho_T is None:       # no signed amplitudes (ORCA without TDA)
+        return None
+    mu_grid, centre = (np.asarray(v, dtype=float) for v in td_entry[4])
+    if calc_orb.transition_density_factor(transitions) > 1.0 and spin_letter(symmetry) == "T":
+        return None
+    rho_T *= -1.0                       # charge density: its dipole is mu_grid
+    exact = None if log_dipole is None else np.asarray(log_dipole, dtype=float)
+    if exact is not None and np.linalg.norm(exact) > FORBIDDEN_DIPOLE and mu_grid @ exact < 0:
+        rho_T *= -1.0
+        mu_grid = -mu_grid
+    deviation = None
+    if exact is not None:
+        deviation = float(np.linalg.norm(mu_grid - exact) / max(np.linalg.norm(exact), 0.1))
+    dipole = exact if exact is not None else mu_grid
+    m = None
+    if magnetic is not None and exact is not None and np.all(np.isfinite(magnetic)):
+        m = (-np.asarray(magnetic, dtype=float)).tolist()
+    return {"dipole": None if np.linalg.norm(dipole) <= FORBIDDEN_DIPOLE else dipole.tolist(),
+            "grid": mu_grid.tolist(), "source": "log" if exact is not None else "grid",
+            "deviation": deviation, "centre": np.asarray(centre), "magnetic": m}
 
 def compute_MO_diagrams(computed_data: ComputedData, ref_data: LogData, nproc, step):
     """Grids of the requested orbitals of the reference (one set per spin if unrestricted).
@@ -1122,7 +1254,9 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
         print(f"Warning: no excitation amplitudes in the log for the state(s) {missing}: "
               "no EDD, Lambda, d_CT and q_CT for them.")
     try:
-        TD_output, grid_X, grid_Y, grid_Z = calc_orb.TD(ref_data, et_transitions, grid_step=step, nproc=nproc, verbose=verbose)
+        TD_output, grid_X, grid_Y, grid_Z = calc_orb.TD(
+            ref_data, et_transitions, grid_step=step, nproc=nproc, verbose=verbose,
+            deexcitations=computed_data.results.excited_states.et_deexcitations[log_idx])
     except MemoryError :
         sys.stderr.write('\n\nERROR: Memory Exception during discretization of MO used in the transitions\n')
         et_transitions = []
@@ -1149,6 +1283,7 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
         computed_data.derived.excited_states.d_ct[log_idx] = [None] * len(et_transitions)
         computed_data.derived.excited_states.q_ct[log_idx] = [None] * len(et_transitions)
         computed_data.derived.excited_states.all_data_dip[log_idx] = [None] * len(et_transitions)
+        computed_data.derived.excited_states.transition_dipoles[log_idx] = [None] * len(et_transitions)
         
         for k in selected_indices:
             if TD_output is None or TD_output[k] is None:
@@ -1161,19 +1296,23 @@ def compute_es_transitions_and_EDD(computed_data: ComputedData, ref_data: LogDat
                 if et_magdips_raw != None:
                     et_magdips = (np.array(et_magdips_raw[k]), np.array([0,0,0]))
 
-            # Get overlap transition dipoles
-            O_dip = (np.array(TD_output[k][4][1]),  np.array(TD_output[k][4][0]))
+            # Transition density and dipole (charge density, phase of the log's dipole)
+            eldip = et_eldips_raw[k] if et_eldips_raw is not None and k < len(et_eldips_raw) else None
+            magdip = (et_magdips_raw[k] if et_magdips_raw is not None and k < len(et_magdips_raw)
+                      and is_chiral(et_rotats) else None)
+            tdm = transition_dipole(TD_output[k], eldip, et_sym[k], et_transitions[k], magdip)
+            computed_data.derived.excited_states.transition_dipoles[log_idx][k] = tdm
 
             print("Generating transition dipole for selected transition:", k+1),
             ct_dip = TD_output[k][2][3:]
-            data_dip = {"GSDIP" : gs_eldip, "OVDIP" : O_dip, "CTDIP" : ct_dip}
+            data_dip = {"GSDIP" : gs_eldip, "CTDIP" : ct_dip}
             if gs_eldip is None:
                 del data_dip["GSDIP"]
-            
-            # In Gaussian Transition dispoles have for origin the center of masses. 
-            if et_eldips_raw != None:
-                et_eldips = (np.array(et_eldips_raw[k]), np.array([0,0,0]))
-                data_dip["ELDIP"] = et_eldips
+            # Transition dipole drawn from the centre of the transition density (it does not
+            # depend on the origin; the origin of the program, e.g. the centre of nuclear charge
+            # of Gaussian, was near Br in HCFClBr, far from the transition)
+            if tdm is not None and tdm["dipole"] is not None:
+                data_dip["ELDIP"] = (tdm["centre"] + np.asarray(tdm["dipole"]), tdm["centre"])
         
             # TODO : TO CHECK : VELDIP disabled for now in data_dip
             if et_veldips_raw != None:
@@ -1540,7 +1679,10 @@ def compute_optimized_es_transitions_and_EDD(computed_data: ComputedData, ref_da
     
     try:
         # Compute the TD_ouput with only the data for the emi_transition (only for the user-given state)
-        TD_output, grid_X, grid_Y, grid_Z = calc_orb.TD(ref_data, [emi_transition], grid_step=step, nproc=nproc)
+        deexc = computed_data.results.excited_states.et_deexcitations[log_idx]
+        TD_output, grid_X, grid_Y, grid_Z = calc_orb.TD(
+            ref_data, [emi_transition], grid_step=step, nproc=nproc,
+            deexcitations=[deexc[emi_index]] if deexc and emi_index < len(deexc) else None)
     except MemoryError :
         sys.stderr.write('\n\nERROR: Memory Exception during discretization of MO used in the transitions\n')
     
@@ -1560,6 +1702,16 @@ def compute_optimized_es_transitions_and_EDD(computed_data: ComputedData, ref_da
         ct_dip = TD_output[0][2][3:]
         data_dip = {"CTDIP" : ct_dip}
         computed_data.derived.optimized_excited_states.all_data_dip[log_idx][emi_index] = data_dip
+        # Transition density and dipole of the emission (same transition, from the excited state)
+        eldips = computed_data.results.excited_states.et_eldips[log_idx]
+        magdips = computed_data.results.excited_states.et_magdips[log_idx]
+        et_sym = computed_data.results.excited_states.et_sym[log_idx]
+        magdip = (magdips[emi_index] if magdips is not None and emi_index < len(magdips)
+                  and is_chiral(computed_data.results.excited_states.et_rot[log_idx]) else None)
+        tdm = transition_dipole(TD_output[0], eldips[emi_index] if eldips is not None and emi_index < len(eldips) else None,
+                                et_sym[emi_index] if et_sym else None, emi_transition, magdip)
+        computed_data.derived.optimized_excited_states.transition_dipoles[log_idx] = [None] * len(et_transitions)
+        computed_data.derived.optimized_excited_states.transition_dipoles[log_idx][emi_index] = tdm
 
     if TD_output is None:
         return

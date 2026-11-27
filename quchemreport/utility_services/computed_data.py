@@ -123,6 +123,8 @@ class ExcitedStatesResults:
     et_oscs: List[Optional[List[float]]]
     et_rot: List[Optional[List[Any]]]
     et_transitions: List[Optional[List[Any]]]
+    # de-excitation amplitudes Y (occupied, virtual, Y) when printed (scanlog.split_deexcitations)
+    et_deexcitations: List[Optional[List[Any]]]
     et_eldips: List[Optional[List[List[float]]]]
     et_veldips: List[Optional[List[List[float]]]]
     et_magdips: List[Optional[List[List[float]]]]
@@ -275,6 +277,8 @@ class ExcitedStatesDerivedData:
     grid_Y: List[Optional[Any]]
     grid_Z: List[Optional[Any]]
     all_data_dip: List[Optional[List[Any]]]
+    # transition density and dipole of each selected state (compute.transition_dipole)
+    transition_dipoles: List[Optional[List[Any]]]
     abso_spectrum: List[Optional[Any]]
     CD_spectrum: List[Optional[Any]]
     xvalues: List[Optional[Any]]
@@ -294,6 +298,8 @@ class OptimizedExcitedStatesDerivedData:
     grid_Y: List[Optional[Any]]
     grid_Z: List[Optional[Any]]
     all_data_dip: List[Optional[List[Any]]]
+    # transition density and dipole of the emitting state (compute.transition_dipole)
+    transition_dipoles: List[Optional[List[Any]]]
     emi_spectrum: List[Optional[Any]]
     CPL_spectrum: List[Optional[Any]]
     xvalues: List[Optional[Any]]

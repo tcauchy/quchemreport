@@ -9,16 +9,18 @@ path = log("gaussian/h2co/OPT.log")      # uncompressed copy in a temporary fold
 Z, xyz = geometry("phenanthrene")         # geometries/phenanthrene.xyz
 ```
 
-**Size budget: 2 MB for the whole folder** (1.8 MB in November 2026). Use the smallest
-molecule and basis set that shows the behaviour to test, and avoid `pop=full` / MO printing on
-large systems.
+**Size budget: 10 MB for the whole folder** (raised from 2 MB on 27/11/2026, Thomas Cauchy:
+the logs printed with all the excitation amplitudes, the solvent and ECP cases need more; 2.0 MB
+then). Use the smallest molecule and basis set that shows the behaviour to test, and avoid
+`pop=full` / MO printing on large systems.
 
 ## Contents
 
 | Folder | Program | What it covers |
 |---|---|---|
 | `gaussian/h2o` | Gaussian 09 | H2O examples of the project (OPT, FREQ, TD singlets/triplets, SP±, unrestricted, second basis set, no `pop=full`, ES optimisation, truncated TD) |
-| `gaussian/h2co` | Gaussian 09 D.01 | formaldehyde, PBE0/6-31G(d): OPT, FREQ, TD, TD triplets, SP+ / SP−, S1 and T1 optimisations (emission) |
+| `gaussian/h2co` | Gaussian 09 D.01 | formaldehyde, PBE0/6-31G(d): OPT, FREQ, TD, TD triplets, SP+ / SP−, S1 and T1 optimisations (emission); `TD_full`: TD with all the X and Y amplitudes printed (`IOp(9/40=4)`, transition densities) |
+| `gaussian/hcfclbr` | Gaussian 09 D.01 | chiral HCFClBr, PBE0/6-31G(d), TD 10 singlets with all the X and Y amplitudes (`IOp(9/40=4)`): electric, velocity and magnetic transition dipoles, rotatory strengths in both gauges |
 | `gaussian/hcn_ts` | Gaussian 09 D.01 | HCN ⇄ HNC transition state, OPT=TS + FREQ (one imaginary frequency) |
 | `gaussian/ch3i` | Gaussian 09 D.01 | CH3I with the LANL2DZ ECP on iodine (46 core electrons) |
 | `gaussian/ch2bri` | Gaussian 09 D.01 | CH2BrI with ECPs, with and without `IOp(3/33=1)` (two layouts of the pseudopotential table) |
@@ -27,6 +29,7 @@ large systems.
 | `gaussian/ch3i_mep` | Gaussian 09 D.01 | CH3I single points (nosymm) with LANL2DZ (ECP) and DGDZVP (all-electron iodine, 1s energy printed `**********`) |
 | `gaussian/ch3x_mep` | Gaussian 09 D.01 | CH3Cl and CH3Br single points (nosymm), PBE0/6-31G(d), all-electron halogens (MEP core correction) |
 | `gaussian/dispersion` | Gaussian 09 D.01 | H2O single points, 6-31G(d): B3LYP without dispersion, with GD3 and GD3BJ, and wB97XD / B97D3 (built-in D2 / D3(BJ)) |
+| `gaussian/solvent` | Gaussian 09 D.01 | H2O single point in water, SMD, PBE0/6-31G(d), `pop=hirshfeld` (Hirshfeld and CM5 charges) |
 | `orca5/h2o_td` | ORCA 5.0.4 | H2O TD-DFT (frozen: ORCA 5 is no longer installed) |
 | `orca6/h2co` | ORCA 6.1 | formaldehyde, PBE0/def2-SVP: OPT+FREQ, TD, TD singlets+triplets, TD with SOC, SP+ / SP−, S1 and T1 optimisations |
 | `orca6/nh3_plan` | ORCA 6.1 | planar NH3, OPT+FREQ (one imaginary frequency) |
@@ -34,6 +37,8 @@ large systems.
 | `orca6/functionals` | ORCA 6.1 | H2O single points: PBE0, B3LYP-D3BJ, B3LYP-D4, ωB97X-D3, ωB97X-V, CAM-B3LYP, B2PLYP, TPSSh |
 | `orca6/ch3i` | ORCA 6.1 | CH3I with the def2 ECP on iodine (28 core electrons) |
 | `orca6/acetone_soc` | ORCA 6.1 | acetone, T1 optimization with spin-orbit coupling (`dosoc true`): T1 sublevels, phosphorescence (PBE0/def2-SVP) |
+| `orca6/hcfclbr` | ORCA 6.1 | chiral HCFClBr, PBE0/def2-SVP, TDA 10 singlets with all the amplitudes (`tprint 1e-6`), basis and MOs printed: velocity and magnetic transition dipoles, rotatory strengths in both gauges |
+| `orca6/solvent` | ORCA 6.1 | H2O single point in water, CPCM, PBE0/def2-SVP, `Hirshfeld` charges |
 | `geometries` | — | coordinates only, for tests that do not need a log: phenanthrene, and `mol01`-`mol10` (last geometries of real calculations, renamed by number: helicenes, spiro compounds, folded adducts, a cobalt complex, a 408-atom cage...) for the camera views (`tests/test_camera.py`) |
 | `mep_reference` | Gaussian 09 D.01 | exact MEP (`cubegen 8 potential=SCF`, fine grid) at 400 random points of the 0.002 a.u. iso-density surface, for `gaussian/h2co/OPT.log`, the two `gaussian/ch3i_mep` logs and the two `gaussian/ch3x_mep` logs (checkpoints of these jobs); `make_mep_reference.py JOB.fchk OUT.txt label` makes them (g09 environment needed) |
 

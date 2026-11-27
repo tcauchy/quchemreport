@@ -242,8 +242,19 @@ def test_h2co_full_report(solver):
     for pattern in ("MO-homo", "MEP", "fukui-SP_plus", "fukui-SP_minus", "Fdual", "emi-EDD-S1", "emi-EDD-T1"):
         assert report.images(pattern), pattern
     assert len(report.images("-EDD-T")) >= 5
-    # Planar molecule: a single view per picture (visualization_engine.camera)
-    assert not [f for f in report.files if "_cam2" in f]
+    # Transition densities (27/11/2026): singlets and the emitting singlet; none for the
+    # spin-forbidden triplets of a restricted calculation
+    assert report.images("-TDEN-S") and report.images("emi-TDEN-S1")
+    assert not report.images("-TDEN-T")
+    assert "Transition density (charge)" in report.tex
+    # Planar molecule: a single view per picture (visualization_engine.camera), except the
+    # transition densities and dipoles of the states whose dipole is perpendicular to the plane,
+    # along the line of sight (visu_mayavi.dipole_views, 27/11/2026): then both pictures get the
+    # second view
+    second = [f for f in report.files if "_cam2" in f]
+    assert all("-TDEN-" in f or "-TDIP-" in f for f in second)
+    assert sorted(f.replace("-TDEN-", "-TDIP-") for f in second if "-TDEN-" in f) == \
+        sorted(f for f in second if "-TDIP-" in f)
     assert "fukui functions" in report.tex.lower()
 
 

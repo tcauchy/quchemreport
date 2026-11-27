@@ -1,0 +1,12 @@
+%NProcShared=4
+%mem=2GB
+#p PBE1PBE/6-31G(d) pop=full gfprint td=(nstates=5) IOp(9/40=4) nosymm
+
+TD H2CO, all excitation and de-excitation amplitudes printed (IOp(9/40=4))
+
+0 1
+C 0.000000 0.000000 -0.527148
+O 0.000000 0.000000 0.675364
+H 0.000000 0.938033 -1.120014
+H 0.000000 -0.938033 -1.120014
+

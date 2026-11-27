@@ -1,0 +1,11 @@
+%NProcShared=2
+%mem=1GB
+#p PBE1PBE/6-31G(d) pop=hirshfeld scrf=(smd,solvent=water) nosymm
+
+H2O in water (SMD), Hirshfeld and CM5 charges
+
+0 1
+O   0.000000   0.000000   0.117300
+H   0.000000   0.757200  -0.469200
+H   0.000000  -0.757200  -0.469200
+

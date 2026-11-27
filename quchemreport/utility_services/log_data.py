@@ -9,7 +9,7 @@ cm-1 for the frequencies. Every field defaults to None: a value missing in a log
 Assignments are validated (``validate_assignment``), so a value of the wrong type is refused.
 """
 
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 import numpy as np
@@ -112,7 +112,7 @@ class CompDetailsGeneral(CustomModel):
     is_closed_shell: bool = None
     integration_grid: str = None
     solvent: str = None
-    solvent_reaction_field: str = None
+    solvent_reaction_field: Optional[str] = None   # implicit solvent model (None: gas phase)
     scf_targets: List[List[float]] = None
     core_electrons_per_atoms: List[int] = None
     job_type: List[str] = None
@@ -214,6 +214,9 @@ class ResultsExcitedStates(CustomModel):
     # <S^2> of the excited states of an open-shell reference (scanlog._unrestricted_states)
     et_s2: List[float] = None
     et_transitions: List[List[Tuple[Tuple[int, int], Tuple[int, int], float]]] = None # TODO : TO CHECK (Not sure for the type)
+    # de-excitation amplitudes Y as (occupied, virtual, Y), when the log prints them
+    # (Gaussian IOp(9/40)); empty lists otherwise (scanlog.split_deexcitations)
+    et_deexcitations: List[List[Tuple[Tuple[int, int], Tuple[int, int], float]]] = None
     et_rot: List[float] = None # TODO : TO CHECK (Not sure for the type)
     et_eldips: List[List[float]] = None # TODO : TO CHECK (Not sure for the type)
     et_veldips: List[List[float]] = None # TODO : TO CHECK (Not sure for the type)

@@ -258,7 +258,7 @@ class OutputInclude(BaseModel):
 
 class SurfaceColors(BaseModel):
     """Colours of the positive and negative parts of one kind of iso-surface (``output.colors.MO``,
-    ``EDD``, ``fukui`` or ``NTO``), each "#RRGGBB", a colour name ("teal", "lightpink": the CSS
+    ``EDD``, ``fukui``, ``NTO`` or ``transition_density``), each "#RRGGBB", a colour name ("teal", "lightpink": the CSS
     names known to matplotlib) or [r, g, b] in 0-1; omitted: the default
     (utility_services.parameters.DEFAULT_SURFACE_COLORS). The captions name the colours:
     <sign>_name if given, else the word of the colour, else a name made from its value
@@ -308,12 +308,13 @@ class Colors(BaseModel):
     EDD: SurfaceColors = Field(default_factory=SurfaceColors)
     fukui: SurfaceColors = Field(default_factory=SurfaceColors)
     NTO: SurfaceColors = Field(default_factory=SurfaceColors)
+    transition_density: SurfaceColors = Field(default_factory=SurfaceColors)
 
     def as_dict(self):
         """kind -> sign -> ((r, g, b) or None, name or None), for parameters.set_surface_colors."""
         return {kind: {sign: (getattr(c, sign), getattr(c, sign + "_name"))
                        for sign in ("positive", "negative")}
-                for kind, c in ((k, getattr(self, k)) for k in ("MO", "EDD", "fukui", "NTO"))}
+                for kind, c in ((k, getattr(self, k)) for k in ("MO", "EDD", "fukui", "NTO", "transition_density"))}
 
 
 class Output(BaseModel):
