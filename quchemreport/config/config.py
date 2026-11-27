@@ -7,7 +7,7 @@ when the Config object is built (YAML_loader.load_yaml_config): a wrong value st
 before any log file is read, with a message naming the option.
 """
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, validator, root_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator, validator, root_validator
 from typing import List, Optional, Tuple, Union, Dict
 from pathlib import Path
 import warnings
@@ -323,6 +323,12 @@ class Output(BaseModel):
     camera views and colours of the iso-surfaces.
     """
     output_path: str
+    # folder chosen at launch (report_folder); not read from the YAML file
+    _report_folder: Optional[str] = PrivateAttr(default=None)
+    # Folder <output_path>/<molecule_designated_name> already holding a report: ask (in a
+    # terminal; without one, stop), new (<name>_2...), overwrite (the files of quchemreport are
+    # deleted first) or stop. See execution_engine/output_folder.py.
+    if_exists: str = "ask"
     molecule_designated_name: str
     format: str # html | markdown | pdf # TODO : Output formats are subject to changes
     verbosity: str # full | si | text
@@ -390,6 +396,24 @@ class Output(BaseModel):
         if isinstance(value, bool) or value not in ("auto", 1, 2):
             raise ValueError(f"Output camera_views must be auto, 1 or 2. Not '{v}' .")
         return value
+
+    @field_validator("if_exists")
+    def validate_if_exists(cls, v: str) -> str:
+        """ask, new, overwrite or stop."""
+        value = str(v).strip().lower()
+        if value not in ("ask", "new", "overwrite", "stop"):
+            raise ValueError(f"Output if_exists must be ask, new, overwrite or stop. Not '{v}' .")
+        return value
+
+    def report_folder(self) -> str:
+        """Folder of the report, with the final separator: the one chosen at launch
+        (execution_engine.output_folder, set_report_folder), else <output_path>/<name>."""
+        folder = self._report_folder or os.path.join(self.output_path, self.molecule_designated_name)
+        return folder if folder.endswith(os.sep) else folder + os.sep
+
+    def set_report_folder(self, folder: str) -> None:
+        """Folder chosen at launch (execution_engine.output_folder.resolve_output_folder)."""
+        self._report_folder = folder
 
     @field_validator("spectrum_axis")
     def validate_spectrum_axis(cls, v: str) -> str:

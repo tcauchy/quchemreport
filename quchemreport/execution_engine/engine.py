@@ -37,6 +37,12 @@ def run(config: Config):
         No log file could be read.
     """
     from quchemreport.visualization_engine import visu_mayavi
+    # Folder of the report, checked before any computation (output.if_exists): a previous report
+    # is not overwritten unless asked
+    from quchemreport.execution_engine.output_folder import resolve_output_folder
+    config.output.set_report_folder(resolve_output_folder(config.output.output_path,
+                                                          config.output.molecule_designated_name,
+                                                          config.output.if_exists))
     visu_mayavi.set_image_size(config.output.image_size)
     visu_mayavi.set_image_grid_reduction(config.output.image_grid_reduction,
                                          config.output.image_grid_reduction_sensitive)

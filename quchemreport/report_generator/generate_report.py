@@ -3140,9 +3140,7 @@ def generate_report(computed_data: ComputedData, config:Config, mode="unset"):
 
     # Get output_dir
     designated_name = config.output.molecule_designated_name
-    output_dir = os.path.join(config.output.output_path, designated_name)
-    if not output_dir.endswith(os.sep):
-        output_dir += os.sep
+    output_dir = config.output.report_folder()
     global IMAGE_DIR
     IMAGE_DIR = output_dir
 

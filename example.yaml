@@ -69,6 +69,9 @@ output:
   # Sensitive surfaces (density differences): EDD, Oif, Fukui, Fdual.
   image_grid_reduction_sensitive: 1
   # Main axis of the spectra: wavenumber (cm-1) or energy (eV), linear in energy, or wavelength (nm).
+  # Folder <output_path>/<molecule_designated_name> already holding a report: ask (in a terminal;
+  # without one, e.g. a Slurm job, stop), new (<name>_2...), overwrite or stop.
+  if_exists: ask
   spectrum_axis: wavenumber
   # Unit of the top axis: auto (nm, or cm-1 when the main axis is in nm), cm-1, eV, nm or none.
   spectrum_secondary_axis: auto

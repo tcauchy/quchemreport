@@ -1840,11 +1840,9 @@ def compute_data(list_data_models: List[LogData], validated_data: ValidatedData,
     computed_data: ComputedData = init_computed_data(len_logfiles)
     
     # Manage output dir
-    os.makedirs(config.output.output_path, exist_ok=True)
-    output_dir = os.path.join(config.output.output_path, config.output.molecule_designated_name)
+    # folder chosen at launch (execution_engine.output_folder)
+    output_dir = config.output.report_folder()
     os.makedirs(output_dir, exist_ok=True)
-    if not output_dir.endswith(os.sep):
-        output_dir += os.sep
     computed_data.metadata.output_dir = output_dir
     
     # Get report type
