@@ -57,6 +57,10 @@ made (tested with cclib master on the whole test suite), with these losses:
 
 The installation of the laboratory (`/applis/cclib`) has all of them.
 
+cclib master since 25/04/2026 cannot write the XYZ block of a Gaussian optimization (one comment per
+job, read as one per geometry): QuChemReport builds that block itself until the fix proposed to cclib
+is merged (`parser_engine/scanlog.py`, `last_geometry_xyz`).
+
 ## History
 
 The project was started in 2010 by Thomas CAUCHY, assistant professor in the MOLTECH-Anjou

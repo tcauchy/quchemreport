@@ -899,11 +899,16 @@ def last_geometry_xyz(data):
     """XYZ block of the last geometry read by cclib (atomnos, atomcoords in Angstrom), in the
     format of cclib's XYZ writer, for Open Babel.
 
-    Why not data.writexyz() (27/11/2026): in cclib master after 1.8.1 (commit 58814731, "XYZ:
-    remove -1 as sentinel"), the writer takes the comment of the last geometry as
-    metadata["comments"][n_geometries - 1], but Gaussian stores one comment per job: every
-    Gaussian optimization raised IndexError, so no report could be made with that cclib. The
-    block is built here from the two attributes every cclib version gives."""
+    Temporary workaround (27/11/2026, Thomas Cauchy), to be removed once cclib is fixed: then
+    call data.writexyz() again, as before. Why: the XYZ writer of cclib takes the comment of a
+    geometry as metadata["comments"][index], but the Gaussian parser stores one comment per job
+    (its title section), not one per geometry. It worked by chance for the last geometry while
+    its index was -1; since cclib commit 58814731 (25/04/2026, "XYZ: remove -1 as sentinel") the
+    index is n_geometries - 1 and every Gaussian optimization raises IndexError: no report could
+    be made with cclib master. The cclib of /applis (master of 15/11/2025, 53594d0e) is not
+    affected. Fix proposed to cclib: branch xyz-writer-comments (commit c374f344), see README.
+    The block is built here from the two attributes every cclib version gives, in the format of
+    the cclib writer (same atom lines; the title line is not used by Open Babel)."""
     table = cclib.parser.utils.PeriodicTable()
     coords = data.atomcoords[-1]
     lines = [str(len(data.atomnos)), "Last geometry"]
