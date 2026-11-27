@@ -1099,12 +1099,15 @@ def _extrema_labels(figure, size, extrema, picture):
             seen.append(number - 1)
     if not seen:
         return [], []
-    return _point_labels(figure, size, points[seen], [str(k + 1) for k in seen], EXTREMA_MARKER_SIZE / 2)
+    # equivalent extrema (mep_surface) share the number of their group, that of the table
+    texts = [str(extrema[k].get("group", k + 1)) for k in seen]
+    return _point_labels(figure, size, points[seen], texts, EXTREMA_MARKER_SIZE / 2)
 
 
 def _draw_extrema(figure, extrema):
-    """Markers of the MEP extrema: white spheres for the minima, black spheres for the maxima;
-    their numbers (those of the report table) are written by _extrema_labels."""
+    """Markers of the MEP extrema: white spheres for the minima, black spheres for the maxima,
+    one per member of a group of equivalent extrema; their numbers (those of the groups in the
+    report table) are written by _extrema_labels."""
     if not extrema:
         return
     for number, ext in enumerate(extrema, start=1):

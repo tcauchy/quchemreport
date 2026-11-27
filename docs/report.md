@@ -193,11 +193,16 @@ drawn over it in transparency.
 The **local minima and maxima** of the MEP on the surface are marked by numbered spheres (white:
 minima, black: maxima) and listed in the table below the picture, with their value in kcal/mol
 and atomic units and the nearest atom. The most negative and most positive values (V_S,min and
-V_S,max) are in bold. Extrema that stand out by less than 0.5 kcal/mol from their surroundings
-(prominence: difference between the value at the extremum and the median of the MEP 1.5 to 2.5
-bohr around it) are left out: a study of 4661 extrema of 146 calculations of the laboratory showed
-that these are artefacts of the surface mesh (0.6 % of the extrema), whereas extrema with a small
-value can be real sites (sigma-holes near 0 kcal/mol); when none is left, the caption says so. Extrema on the hidden side of the molecule
+V_S,max) are in bold. **Equivalent extrema** (near atoms that are equivalent in the molecular
+graph, with values within 0.3 kcal/mol: the two lone pairs of a carbonyl, the H atoms of a methyl
+group) share one number in the picture and one line in the table, marked ×n. An extremum is
+reported when it is separated from any stronger, non-equivalent extremum by a saddle at least
+0.5 kcal/mol deep (topological prominence, computed on the surface mesh). This leaves out the
+"shoulders" on the flank of a stronger site and the small creases between the H atoms of a
+methyl group, but keeps weak isolated sites (sigma-holes near 0 kcal/mol). On 146 calculations of
+the laboratory (4661 extrema), this reports 16 % fewer extrema than the former criterion
+(difference with the median of the MEP 1.5 to 2.5 bohr around), with no real site lost in the
+cases examined; when none is left, the caption says so. Extrema on the hidden side of the molecule
 are in the table but their numbers are not written in the picture (with two points of view, each
 picture numbers the extrema it shows). These values agree with Gaussian (cubegen) within 0.75 kcal/mol.
 

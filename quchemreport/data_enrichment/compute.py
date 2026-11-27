@@ -762,7 +762,8 @@ def compute_MEP_maps(computed_data, ref_data, nproc, step):
         coords = np.asarray(ref_data.results.geometry.elements_3D_coords, dtype=float).reshape(-1, 3) / a0_to_A
         computed_data.derived.wavefunction.MEP_maps.surface_isovalue = mep_surface.MEP_SURFACE_ISOVALUE
         computed_data.derived.wavefunction.MEP_maps.color_range = mep_surface.color_range(ref_data.molecule.charge or 0)
-        extrema = mep_surface.mep_surface_extrema(rho, MEP, grid_X, grid_Y, grid_Z, coords)
+        extrema = mep_surface.mep_surface_extrema(rho, MEP, grid_X, grid_Y, grid_Z, coords,
+                                                  atoms_Z=list(ref_data.molecule.atoms_Z or []) or None)
         computed_data.derived.wavefunction.MEP_maps.surface_extrema = mep_surface.merge_rings(
             extrema, coords, _view_and_centre(ref_data)[2])
     except Exception as e:

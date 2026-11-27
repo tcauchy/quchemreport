@@ -17,6 +17,10 @@ matter (a sigma-hole can be weaker than an acidic hydrogen); the extrema are fou
 VTK contour as the pictures, so that the markers lie on the drawn surface. The radius of 1 bohr
 separates the two lone pairs of a carbonyl oxygen and the three minima of the negative belt of
 a halogen, and is checked on azulene (no spurious extrema on a large pi system).
+
+Equivalent extrema are grouped and the weak ones left out by their topological prominence
+(decision of Thomas Cauchy, 27/11/2026, see PROMINENCE_MIN and EQUIVALENT_TOL): the members of a
+group share one number in the picture and one line in the table.
 """
 import numpy as np
 
@@ -24,25 +28,41 @@ import numpy as np
 MEP_SURFACE_ISOVALUE = 0.001
 # Two extrema of the same kind are at least this far apart (bohr)
 EXTREMA_RADIUS = 1.0
-# Prominence of an extremum: how much it stands out from its surroundings, |V_ext - median of V
-# on the surface points PROMINENCE_SHELL (bohr) away from it|. Extrema less prominent than
-# PROMINENCE_MIN (hartree/e; 0.5 kcal/mol) are not reported.
-# Why (statistical study of 26/11/2026, validation/calculs_20261123/mep_extrema_stats: all the
-# extrema, without threshold, of 146 calculations of the laboratory, 4661 extrema):
-# - a threshold on |V| (2 kcal/mol, tried first) has no statistical basis: the distribution of
-#   |V| has one peak (about 15 kcal/mol) and a continuous tail towards zero, with no valley nor
-#   stable inflection; the 4 % of extrema below 2 kcal/mol stand out as much as the others
-#   (median prominence 2.6 kcal/mol) and include sigma-holes (Cl: +2.1 kcal/mol);
-# - the prominence has one peak (3.5-4 kcal/mol for neutral molecules, 5 for ions) and a
-#   separate tail below 0.5 kcal/mol (0.6 % of the extrema): "maxima" above carbon atoms in the
-#   negative pi regions of helicenes (V = -11 to -21 kcal/mol), some not even above their
-#   surroundings, i.e. artefacts of the mesh;
-# - O2 keeps its weak but real extrema (rings at -1.4 and +5.6 kcal/mol, +0.17 kcal/mol at the
-#   ends of the axis, prominences 1.0 to 4.0).
-# The radius of the shell is a choice: a topological prominence (depth of the saddle towards a
-# stronger extremum) would need none.
-PROMINENCE_SHELL = (1.5, 2.5)
+# Topological prominence of an extremum (0-dimensional persistence on the surface mesh): how deep
+# the saddle is that leads from it to a stronger extremum of the same kind, |V_ext - V_saddle|;
+# the strongest extremum of the surface gets the whole range of V. Equivalent extrema (see
+# EQUIVALENT_TOL) form a group: the saddle between two members does not end either of them, so
+# that a group is ended only by a stronger, non-equivalent extremum, and all its members share the
+# prominence of the group. Groups less prominent than PROMINENCE_MIN (hartree/e; 0.5 kcal/mol)
+# are not reported.
+# Why (decision of Thomas Cauchy, 27/11/2026; study validation/calculs_20261127/mep_topology on
+# the 146 calculations of the laboratory used below, 4661 extrema):
+# - the former criterion (26/11/2026: V_ext - median of V on a shell 1.5-2.5 bohr around, at least
+#   0.5 kcal/mol) depended on the radius of the shell, and kept "shoulders": a weaker extremum on
+#   the flank of a stronger one (the row of maxima along the H atoms of a helicene, saddles of
+#   0.05-0.5 kcal/mol; a second minimum on the same oxygen at -15.8 kcal/mol next to -23.0, shell
+#   prominence 9.5 but saddle 0.4), the small positive minima between the H atoms of a methyl
+#   group (acetone +4.9 kcal/mol: shell 2.0, saddle 0.13) and minima above zero or maxima below
+#   zero in the regions of the opposite sign; the topological prominence needs no radius;
+# - alone, it is too severe: two equivalent extrema (the lone pairs of a carbonyl, the H atoms
+#   of a methyl group) are joined by a shallow saddle, and the weaker one would be dropped; hence
+#   the groups;
+# - with the groups and the same 0.5 kcal/mol threshold: 3909 extrema reported instead of 4638
+#   (16 % fewer, a single one gained), in 3120 groups; no real chemical site lost in the cases
+#   examined. The threshold keeps its meaning: below it, a site is not separated from a stronger
+#   one;
+# - cost: about 1 s for a surface of 180 000 vertices, 2 s for 410 000 (Python lists: 4 to 5
+#   times faster than the same loop reading numpy arrays element by element).
 PROMINENCE_MIN = 0.5 / 627.509
+# Equivalent extrema: same kind, nearest atoms in the same symmetry class of the molecular graph
+# (Open Babel, OBGraphSym) and values within EQUIVALENT_TOL (hartree/e; 0.3 kcal/mol), chained.
+# Why (same study): the class alone is not enough, since atoms equivalent in the graph can differ
+# by several kcal/mol through the conformation (median 2.1 kcal/mol between extrema of the same
+# class); the differences between symmetry equivalents come from the grid (21 % of the pairs of
+# the same class within 0.05 kcal/mol, 25 % within 0.1, then a slow rise without valley). 0.1 was
+# too strict (two equivalent oxygens of DAdd_133 differ by 0.10 and 0.13 kcal/mol); 1.0 also
+# groups sites that are only similar.
+EQUIVALENT_TOL = 0.3 / 627.509
 # Half-width (hartree/e) of the fixed, symmetric colour scale of the MEP pictures, by charge of
 # the molecule (decision of Thomas Cauchy, 24/11/2026). No standard range exists: the usual
 # practice is a symmetric scale around zero, the same for a series of compounds, given with a
@@ -135,34 +155,121 @@ def local_extrema(points, triangles, values, radius=EXTREMA_RADIUS):
     return found
 
 
-def prominences(points, values, extrema, shell=PROMINENCE_SHELL):
-    """Prominence of each (kind, vertex) of extrema: V_ext - median of V on the points at a
-    distance within shell (bohr), with the sign that makes it positive when the extremum stands
-    out (a minimum below its surroundings); None when no point lies in the shell."""
-    from scipy.spatial import cKDTree
-    tree = cKDTree(points)
-    out = []
-    for kind, i in extrema:
-        near = np.asarray(tree.query_ball_point(points[i], shell[1]), dtype=int)
-        ring = near[np.linalg.norm(points[near] - points[i], axis=1) >= shell[0]] if len(near) else near
-        if len(ring) == 0:
-            out.append(None)
-            continue
-        sign = -1.0 if kind == "min" else 1.0
-        out.append(float(sign * (values[i] - np.median(values[ring]))))
-    return out
+def mesh_neighbours(n, triangles):
+    """Neighbours of the n vertices of the mesh, as CSR lists (indptr, indices)."""
+    from scipy.sparse import coo_matrix
+    t = np.asarray(triangles)
+    i = np.concatenate([t[:, 0], t[:, 1], t[:, 2], t[:, 1], t[:, 2], t[:, 0]])
+    j = np.concatenate([t[:, 1], t[:, 2], t[:, 0], t[:, 0], t[:, 1], t[:, 2]])
+    m = coo_matrix((np.ones(len(i), dtype=np.int8), (i, j)), shape=(n, n)).tocsr()
+    return m.indptr.tolist(), m.indices.tolist()
+
+
+def group_prominences(values, neighbours, kind, group_of_vertex):
+    """Topological prominence (see PROMINENCE_MIN) of the vertices of group_of_vertex, extrema of
+    the given kind ("min" or "max"): {vertex: prominence of its group}.
+
+    Vertices are added from the most extreme value (union-find); when two components meet at a
+    vertex (a saddle), the one born at the less extreme value ends there, with prominence
+    |V_birth - V_saddle|, unless both were born at members of the same group. The loop reads
+    Python lists, not numpy arrays (see PROMINENCE_MIN for the cost).
+
+    values: V at the vertices; neighbours: mesh_neighbours; group_of_vertex: {vertex: group}."""
+    sign = -1.0 if kind == "min" else 1.0
+    signed = (sign * np.asarray(values, dtype=float)).tolist()      # larger: more extreme
+    order = np.argsort(-sign * np.asarray(values, dtype=float), kind="stable").tolist()
+    indptr, indices = neighbours
+    parent = [-1] * len(signed)
+    birth = [0] * len(signed)
+    ended = {}
+
+    def root(a):
+        r = a
+        while parent[r] != r:
+            r = parent[r]
+        while parent[a] != r:
+            parent[a], a = r, parent[a]
+        return r
+
+    for v in order:
+        parent[v] = v
+        birth[v] = v
+        for k in range(indptr[v], indptr[v + 1]):
+            u = indices[k]
+            if parent[u] < 0:
+                continue
+            ru, rv = root(u), root(v)
+            if ru == rv:
+                continue
+            older, younger = (ru, rv) if signed[birth[ru]] >= signed[birth[rv]] else (rv, ru)
+            dying = birth[younger]
+            same = group_of_vertex.get(dying)
+            if dying != v and not (same is not None and same == group_of_vertex.get(birth[older])):
+                ended[dying] = signed[dying] - signed[v]
+            parent[younger] = older
+    last = signed[order[-1]]
+    for r in {root(v) for v in range(len(signed))}:
+        ended.setdefault(birth[r], signed[birth[r]] - last)
+    best = {}
+    for vertex, group in group_of_vertex.items():
+        best[group] = max(best.get(group, 0.0), ended.get(vertex, 0.0))
+    return {vertex: best[group] for vertex, group in group_of_vertex.items()}
+
+
+def symmetry_classes(atoms_Z, coords):
+    """Symmetry class of each atom in the molecular graph (Open Babel OBGraphSym, bonds perceived
+    from the geometry); one class per atom when atoms_Z is None or Open Babel fails.
+
+    atoms_Z: atomic numbers; coords: nuclei (n, 3, bohr)."""
+    coords = np.asarray(coords, dtype=float).reshape(-1, 3)
+    if atoms_Z is None or len(atoms_Z) != len(coords):
+        return list(range(len(coords)))
+    try:
+        from openbabel import openbabel as ob
+        mol = ob.OBMol()
+        for Z, xyz in zip(atoms_Z, coords * 0.52917721092):
+            atom = mol.NewAtom()
+            atom.SetAtomicNum(int(Z))
+            atom.SetVector(*map(float, xyz))
+        mol.ConnectTheDots()
+        mol.PerceiveBondOrders()
+        classes = ob.vectorUnsignedInt()
+        ob.OBGraphSym(mol).GetSymmetry(classes)
+        classes = [int(c) for c in classes]
+        return classes if len(classes) == len(coords) else list(range(len(coords)))
+    except Exception:
+        return list(range(len(coords)))
+
+
+def number_groups(extrema):
+    """Number (1, 2, ...) of the group of each extremum, in the order of the list, and the number
+    of members of its group: keys "group" and "multiplicity". extrema: sorted by group."""
+    numbers = {}
+    for e in extrema:
+        e["group"] = numbers.setdefault(e.get("_group", e.get("group")), len(numbers) + 1)
+    counts = {}
+    for e in extrema:
+        counts[e["group"]] = counts.get(e["group"], 0) + 1
+    for e in extrema:
+        e["multiplicity"] = counts[e["group"]]
+        e.pop("_group", None)
+    return extrema
 
 
 def mep_surface_extrema(rho, MEP, X, Y, Z, coords, isovalue=MEP_SURFACE_ISOVALUE,
-                        radius=EXTREMA_RADIUS):
-    """Local extrema of the MEP on the density isosurface.
+                        radius=EXTREMA_RADIUS, atoms_Z=None):
+    """Local extrema of the MEP on the density isosurface, grouped by equivalence.
 
-    rho, MEP, X, Y, Z: grids of calc_orb.Potential (bohr, hartree/e); coords: nuclei (n, 3, bohr).
-    Extrema less prominent than PROMINENCE_MIN (see prominences) are left out.
-    Returns a list of dicts, minima from the most negative then maxima from the most positive:
-    kind ("min"/"max"), value (hartree/e), position (bohr), atom (index of the nearest nucleus),
-    distance (to that nucleus, bohr) and direction (unit vector from that nucleus, to place
-    markers outside the surface). Empty list when the isosurface is empty.
+    rho, MEP, X, Y, Z: grids of calc_orb.Potential (bohr, hartree/e); coords: nuclei (n, 3, bohr);
+    atoms_Z: atomic numbers, for the symmetry classes of the equivalent extrema (EQUIVALENT_TOL;
+    without them, only extrema near the same atom can be grouped). Groups less prominent than
+    PROMINENCE_MIN (topological prominence, group_prominences) are left out.
+    Returns a list of dicts, the groups of minima from the most negative then those of maxima
+    from the most positive, each group from its most extreme member: kind ("min"/"max"), value
+    (hartree/e), position (bohr), atom (index of the nearest nucleus), distance (to that nucleus,
+    bohr), direction (unit vector from that nucleus, to place markers outside the surface),
+    prominence (of the group, hartree/e), group (its number, shared by its members) and
+    multiplicity (number of members). Empty list when the isosurface is empty.
     """
     from scipy.interpolate import RegularGridInterpolator
     points, triangles = isosurface(rho, X, Y, Z, isovalue)
@@ -171,20 +278,47 @@ def mep_surface_extrema(rho, MEP, X, Y, Z, coords, isovalue=MEP_SURFACE_ISOVALUE
     values = RegularGridInterpolator((X[:, 0, 0], Y[0, :, 0], Z[0, 0, :]), MEP,
                                      bounds_error=False, fill_value=None)(points)
     coords = np.asarray(coords, dtype=float).reshape(-1, 3)
-    extrema = []
-    found = local_extrema(points, triangles, values, radius)
-    prominence = prominences(points, values, found)
-    for (kind, i), prom in zip(found, prominence):
+    classes = symmetry_classes(atoms_Z, coords)
+    extrema, vertices = [], []
+    for kind, i in local_extrema(points, triangles, values, radius):
         offsets = points[i] - coords
         distances = np.linalg.norm(offsets, axis=1)
         atom = int(np.argmin(distances))
         extrema.append({"kind": kind, "value": float(values[i]), "position": points[i].tolist(),
                         "atom": atom, "distance": float(distances[atom]),
-                        "direction": (offsets[atom] / distances[atom]).tolist(), "prominence": prom})
-    extrema = [e for e in extrema if e["prominence"] is None or e["prominence"] >= PROMINENCE_MIN]
-    minima = sorted((e for e in extrema if e["kind"] == "min"), key=lambda e: e["value"])
-    maxima = sorted((e for e in extrema if e["kind"] == "max"), key=lambda e: -e["value"])
-    return minima + maxima
+                        "direction": (offsets[atom] / distances[atom]).tolist()})
+        vertices.append(int(i))
+    # Groups of equivalent extrema (chained: a ~ b and b ~ c put a, b and c together)
+    group = list(range(len(extrema)))
+
+    def root(a):
+        while group[a] != a:
+            a = group[a]
+        return a
+
+    for i, a in enumerate(extrema):
+        for j in range(i):
+            b = extrema[j]
+            if (a["kind"] == b["kind"] and classes[a["atom"]] == classes[b["atom"]]
+                    and abs(a["value"] - b["value"]) <= EQUIVALENT_TOL):
+                group[root(i)] = root(j)
+    neighbours = mesh_neighbours(len(points), triangles)
+    for kind in ("min", "max"):
+        members = {vertices[k]: root(k) for k, e in enumerate(extrema) if e["kind"] == kind}
+        if members:
+            prominence = group_prominences(values, neighbours, kind, members)
+            for k, e in enumerate(extrema):
+                if e["kind"] == kind:
+                    e["prominence"] = prominence[vertices[k]]
+    for k, e in enumerate(extrema):
+        e["_group"] = root(k)
+    extrema = [e for e in extrema if e["prominence"] >= PROMINENCE_MIN]
+    sign = {"min": 1.0, "max": -1.0}
+    strongest = {}
+    for e in extrema:
+        strongest[e["_group"]] = min(strongest.get(e["_group"], np.inf), sign[e["kind"]] * e["value"])
+    extrema.sort(key=lambda e: (e["kind"] != "min", strongest[e["_group"]], e["_group"], sign[e["kind"]] * e["value"]))
+    return number_groups(extrema)
 
 
 def merge_rings(extrema, coords, up, tol=1.0e-4):
@@ -229,4 +363,5 @@ def merge_rings(extrema, coords, up, tol=1.0e-4):
     for m in merged:
         m.pop("_t", None)
         m.pop("_r", None)
-    return merged
+    # a ring keeps the number of its group, now with a single entry
+    return number_groups(merged) if all("group" in m for m in merged) else merged

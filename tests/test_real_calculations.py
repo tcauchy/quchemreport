@@ -446,6 +446,12 @@ SURFACE_EXTREMA = {
 }
 
 
+# Groups of equivalent extrema: the two lone pairs of H2CO; the belt (3 minima) and the three H
+# maxima of CH3Br, apart from its sigma-hole
+SURFACE_GROUPS = {"gaussian/h2co/OPT.log": [1, 1, 2],
+                  "gaussian/ch3x_mep/SP_CH3Br.log": [1, 1, 1, 2, 2, 2, 3]}
+
+
 @pytest.mark.parametrize("path", SURFACE_EXTREMA)
 def test_mep_surface_extrema(path):
     """MEP extrema on the 0.001 e-/bohr3 isosurface against Gaussian (cubegen at the same points)."""
@@ -463,6 +469,10 @@ def test_mep_surface_extrema(path):
         if atom is not None:
             assert ext["atom"] == atom
         assert abs(ext["value"] * Eh_to_Kcal_mol - value) < 0.5
+    # with the atomic numbers, the symmetry equivalents share a group (the same extrema)
+    grouped = mep_surface.mep_surface_extrema(rho, mep, X, Y, Z, coords, atoms_Z=list(model.molecule.atoms_Z))
+    assert [e["value"] for e in grouped] == [e["value"] for e in extrema]
+    assert [e["group"] for e in grouped] == SURFACE_GROUPS[path]
 
 
 # ------------------------------------------------------------- ORCA excited state energies

@@ -1243,8 +1243,9 @@ def render_ref_MEP_maps(section, output_dir, computed_data: ComputedData, report
     weakest = f"{mep_surface.PROMINENCE_MIN * Eh_to_Kcal_mol:.1f} kcal/mol"
     if extrema:
         caption += ("Numbered spheres: local minima (white) and maxima (black) of the MEP on this surface "
-                    f"(see the table below; extrema standing out by less than {weakest} from their "
-                    "surroundings are not shown; the numbers on the hidden side are not written).")
+                    "(see the table below; equivalent extrema share a number; extrema separated from a "
+                    f"stronger one by a saddle less than {weakest} deep are not shown; the numbers on the "
+                    "hidden side are not written).")
     elif maps.surface_extrema is not None:
         caption += f"No local extremum of the MEP standing out by more than {weakest} on this surface."
     nomPng2 = f"img-log{ref_id + 1}-MEP_cam2.png"
@@ -1274,9 +1275,9 @@ def render_ref_MEP_maps(section, output_dir, computed_data: ComputedData, report
 
 
 def render_MEP_extrema_table(section, computed_data: ComputedData, isovalue, extrema):
-    """Table of the local minima and maxima of the MEP on the surface, numbered as the markers
-    of the picture: type, value in kcal/mol and a.u., nearest atom and its distance;
-    V_S,min and V_S,max in bold.
+    """Table of the local minima and maxima of the MEP on the surface, one line per group of
+    equivalent extrema, numbered as the markers of the picture: type (with the number of members),
+    value in kcal/mol and a.u., nearest atoms and their distance; V_S,min and V_S,max in bold.
 
     Parameters
     ----------
@@ -1302,18 +1303,34 @@ def render_MEP_extrema_table(section, computed_data: ComputedData, isovalue, ext
         table.add_row(["N°", "Type", NoEscape(r"$V_\mathrm{S}$ (kcal/mol)"), NoEscape(r"$V_\mathrm{S}$ (a.u.)"),
                        "Nearest atom (N°)", "Distance (pm)"])
         table.add_hline()
+        # One line per group of equivalent extrema (mep_surface: same number in the picture), with
+        # the value of its most extreme member (the first one), its atoms and range of distances
+        groups = {}
+        for number, ext in enumerate(extrema, start=1):
+            groups.setdefault(ext.get("group", number), []).append(ext)
         first = {"min": extrema[0] if extrema[0]["kind"] == "min" else None,
                  "max": next((e for e in extrema if e["kind"] == "max"), None)}
-        for number, ext in enumerate(extrema, start=1):
-            atom = f"{PeriodicTable().element[atoms_Z[ext['atom']]]} (N°{ext['atom'] + 1})"
+        for number, members in groups.items():
+            ext = members[0]
+            indices = sorted({m["atom"] for m in members})
+            atom = (f"{PeriodicTable().element[atoms_Z[ext['atom']]]} "
+                    f"(N°{', '.join(str(i + 1) for i in indices)})")
             kcal = f"{ext['value'] * Eh_to_Kcal_mol:+.1f}"
             au = f"{ext['value']:+.4f}"
             if ext is first[ext["kind"]]:
                 kcal, au = bold(kcal), bold(au)
             kind = ("minimum" if ext["kind"] == "min" else "maximum") + (" (ring)" if ext.get("ring") else "")
-            table.add_row([str(number), kind, kcal, au,
-                           atom, f"{ext['distance'] * a0_to_pm:.0f}"])
+            if len(members) > 1:
+                kind = NoEscape(escape_latex(kind) + rf" $\times${len(members)}")
+            pm = sorted({round(m["distance"] * a0_to_pm) for m in members})
+            distance = f"{pm[0]}" if len(pm) == 1 else f"{pm[0]}-{pm[-1]}"
+            table.add_row([str(number), kind, kcal, au, atom, distance])
         table.add_hline()
+        if any(len(members) > 1 for members in groups.values()):
+            table.add_row([MultiColumn(6, align=NoEscape('p{0.95\\textwidth}'), data=NoEscape(
+                r"\footnotesize $\times n$: n equivalent extrema (atoms equivalent in the molecular graph, values within "
+                f"{mep_surface.EQUIVALENT_TOL * Eh_to_Kcal_mol:.1f} kcal/mol), with the same number in the picture; "
+                r"the value is that of the most extreme one."))])
         if any(ext.get("ring") for ext in extrema):
             table.add_row([MultiColumn(6, align='l', data=NoEscape(
                 r"\footnotesize Ring: the same value all around the axis of the linear molecule "

@@ -106,18 +106,59 @@ def test_mep_ring_of_a_linear_molecule():
     assert merge_rings(belt, coords + [[1, 0, 0]], up=(0, 1, 0)) == belt
 
 
-def test_prominence_filters_ripples_not_weak_sites():
-    """Prominence (V_ext - median of V 1.5-2.5 bohr around): a weak but isolated maximum
-    (sigma-hole near 0) stands out; a bump of a few 1e-5 a.u. on a plateau does not."""
-    from quchemreport.data_enrichment.mep_surface import prominences, PROMINENCE_MIN
-    g = np.linspace(-5, 5, 101)
+def _plane_mesh(n=81, half=5.0):
+    """Vertices and triangles of a square grid of the plane z = 0 (bohr)."""
+    g = np.linspace(-half, half, n)
     X, Y = np.meshgrid(g, g, indexing="ij")
     points = np.column_stack([X.ravel(), Y.ravel(), np.zeros(X.size)])
-    r2 = X ** 2 + Y ** 2
-    weak_site = 0.002 * np.exp(-r2) - 0.006 * (1 - np.exp(-r2))     # +1.3 kcal/mol, deep surroundings
-    ripple = -0.02 + 3e-5 * np.exp(-r2)                              # flat -12.6 kcal/mol + ripple
-    centre = int(np.argmin(r2.ravel()))
-    p_site = prominences(points, weak_site.ravel(), [("max", centre)])[0]
-    p_ripple = prominences(points, ripple.ravel(), [("max", centre)])[0]
-    assert p_site > PROMINENCE_MIN > p_ripple > 0
-    assert prominences(points, -weak_site.ravel(), [("min", centre)])[0] == p_site
+    k = np.arange(n * n).reshape(n, n)
+    a, b, c, d = k[:-1, :-1].ravel(), k[1:, :-1].ravel(), k[:-1, 1:].ravel(), k[1:, 1:].ravel()
+    triangles = np.concatenate([np.column_stack([a, b, d]), np.column_stack([a, d, c])])
+    return points, triangles, X, Y
+
+
+def test_topological_prominence_filters_ripples_not_weak_sites():
+    """Topological prominence (depth of the saddle towards a stronger extremum): a weak but
+    isolated maximum (sigma-hole near 0) stands out; a bump of a few 1e-5 a.u. on the flank of a
+    stronger maximum does not; minima behave as maxima of -V."""
+    from quchemreport.data_enrichment.mep_surface import mesh_neighbours, group_prominences, PROMINENCE_MIN
+    points, triangles, X, Y = _plane_mesh()
+    nb = mesh_neighbours(len(points), triangles)
+    centre = int(np.argmin(X.ravel() ** 2 + Y.ravel() ** 2))
+    weak_site = (0.002 * np.exp(-(X ** 2 + Y ** 2)) - 0.006 * (1 - np.exp(-(X ** 2 + Y ** 2)))).ravel()
+    p_site = group_prominences(weak_site, nb, "max", {centre: 0})[centre]
+    assert p_site > PROMINENCE_MIN
+    assert np.isclose(group_prominences(-weak_site, nb, "min", {centre: 0})[centre], p_site)
+    # strong maximum at x = -3, ripple at the centre on its flank
+    flank = (0.02 * np.exp(-((X + 3) ** 2 + Y ** 2) / 8) + 3e-5 * np.exp(-4 * (X ** 2 + Y ** 2))).ravel()
+    top = int(np.argmax(flank))
+    p = group_prominences(flank, nb, "max", {top: 0, centre: 1})
+    assert p[top] > PROMINENCE_MIN > p[centre]
+
+
+def test_equivalent_extrema_share_the_prominence_of_their_group():
+    """Two equal maxima joined by a shallow saddle (the H atoms of a methyl group): apart, the
+    weaker one is ended by the saddle; grouped, both keep the prominence of the group."""
+    from quchemreport.data_enrichment.mep_surface import mesh_neighbours, group_prominences, PROMINENCE_MIN
+    points, triangles, X, Y = _plane_mesh()
+    # saddle about 0.2 kcal/mol below the two maxima
+    V = 0.03 * (np.exp(-((X - 0.75) ** 2 + Y ** 2)) + np.exp(-((X + 0.75) ** 2 + Y ** 2))).ravel()
+    nb = mesh_neighbours(len(points), triangles)
+    left = int(np.argmax(np.where(points[:, 0] < 0, V, -1)))
+    right = int(np.argmax(np.where(points[:, 0] > 0, V, -1)))
+    apart = group_prominences(V, nb, "max", {left: 0, right: 1})
+    together = group_prominences(V, nb, "max", {left: 0, right: 0})
+    assert min(apart.values()) < PROMINENCE_MIN
+    assert together[left] == together[right] == max(apart.values()) > PROMINENCE_MIN
+
+
+def test_symmetry_classes_and_group_numbers():
+    """Water: the two H atoms in the same class; numbering: members of a group share a number."""
+    from quchemreport.data_enrichment.mep_surface import symmetry_classes, number_groups
+    water = np.array([[0, 0, 0.2217], [0, 1.4309, -0.8867], [0, -1.4309, -0.8867]]) / 0.52917721092
+    classes = symmetry_classes([8, 1, 1], water)
+    assert classes[1] == classes[2] != classes[0]
+    assert symmetry_classes(None, water) == [0, 1, 2]
+    numbered = number_groups([{"_group": 7}, {"_group": 7}, {"_group": 3}])
+    assert [e["group"] for e in numbered] == [1, 1, 2]
+    assert [e["multiplicity"] for e in numbered] == [2, 2, 1]
