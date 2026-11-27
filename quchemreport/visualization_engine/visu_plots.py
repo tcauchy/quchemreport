@@ -1,21 +1,18 @@
 """Pictures of the spectra (matplotlib): broadened spectrum on top, sticks of the transitions
-below. The main axis is the wavenumber (cm-1, decreasing, linear in energy) or the wavelength
-(nm, the habit of experimental chemists), chosen with ``output.spectrum_axis``; the other unit
-is on the top axis.
+below. The main axis is the wavenumber (cm-1), the energy (eV), both linear in energy and
+decreasing to the right, or the wavelength (nm, the habit of experimental chemists), chosen with
+``output.spectrum_axis``; a second unit can be shown on the top axis
+(``output.spectrum_secondary_axis``).
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FixedLocator, NullLocator
+from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
 
 from quchemreport.data_enrichment import TD2UVvis
 
-# Main axis of the spectra: "wavenumber" (default) or "wavelength" (set_spectrum_axis)
-SPECTRUM_AXIS = "wavenumber"
-# Smallest distance between two labels of the top axis, per character of the longer label, as
-# a share of the axis length: 0.09 for the 3-digit nm labels, 0.15 for the 5-digit cm-1
-# labels (a fixed 0.09 still let "80000" and "70000" touch on a wavelength axis)
-TOP_TICK_GAP_PER_CHAR = 0.03
+# eV per cm-1 (CODATA 2018: 1 eV = 8065.543937 cm-1)
+EV_PER_CM = 1.0 / 8065.543937
 
 
 def _reciprocal(x):
@@ -26,12 +23,81 @@ def _reciprocal(x):
         return np.where(x != 0, 1.0e7 / np.where(x != 0, x, 1.0), np.nan)
 
 
-def set_spectrum_axis(axis):
-    """Main axis of the spectra: "wavenumber" (cm-1) or "wavelength" (nm)."""
-    global SPECTRUM_AXIS
-    if axis not in ("wavenumber", "wavelength"):
-        raise ValueError(f"spectrum axis must be wavenumber or wavelength, not {axis!r}")
-    SPECTRUM_AXIS = axis
+# Units of the spectrum axes: axis label, label on the top axis, conversion from and to cm-1,
+# whether the values decrease with the energy (then the axis is not inverted), and the
+# spacings of the top ticks (roundest first; the finer ones only when too few ticks were found)
+UNITS = {
+    "wavenumber": {"label": r"Wavenumber / cm$^{-1}$", "top": r"$\tilde{\nu}$ / cm$^{-1}$",
+                   "from_cm": lambda x: np.asarray(x, dtype=float), "to_cm": lambda x: np.asarray(x, dtype=float),
+                   "reciprocal": False, "steps": [10000, 5000, 2000, 1000], "finer": [500, 200, 100]},
+    "energy": {"label": r"Energy / eV", "top": r"$E$ / eV",
+               "from_cm": lambda x: np.asarray(x, dtype=float) * EV_PER_CM,
+               "to_cm": lambda x: np.asarray(x, dtype=float) / EV_PER_CM,
+               "reciprocal": False, "steps": [1.0, 0.5, 0.2, 0.1], "finer": [0.05, 0.02, 0.01]},
+    "wavelength": {"label": r"Wavelength / nm", "top": r"$\lambda$ / nm",
+                   "from_cm": _reciprocal, "to_cm": _reciprocal,
+                   "reciprocal": True, "steps": [100, 50, 20, 10], "finer": [5, 2, 1]},
+}
+# Names accepted in the YAML file for each unit
+UNIT_ALIASES = {"wavenumber": "wavenumber", "cm-1": "wavenumber", "cm^-1": "wavenumber",
+                "energy": "energy", "ev": "energy", "wavelength": "wavelength", "nm": "wavelength"}
+
+# Main axis of the spectra and unit of the top axis (None: no top axis); set_spectrum_axis
+SPECTRUM_AXIS = "wavenumber"
+SECONDARY_AXIS = "wavelength"
+# Smallest distance between two labels of the top axis, per character of the longer label, as
+# a share of the axis length: 0.09 for the 3-digit nm labels, 0.15 for the 5-digit cm-1
+# labels (a fixed 0.09 still let "80000" and "70000" touch on a wavelength axis)
+TOP_TICK_GAP_PER_CHAR = 0.03
+# Displayed range of the spectra (without output.spectrum_range), computed in energy: on the
+# high-energy side, up to the last band that can be seen (curve above VISIBLE_SHARE of its
+# largest value, or stick above VISIBLE_SHARE of the largest one); on the low-energy side, down
+# to the lowest computed state, even a dark one; widened by VIEW_MARGIN of that span on each
+# side, within the computed grid.
+# Why (27/11/2026, Thomas Cauchy): the wavelength axis was already cut to what is visible, but
+# the wavenumber axis showed the whole grid (3 FWHM around every band) plus the 5 % margins of
+# matplotlib: a single band filled 42 % of the axis (80 % in nm), and for a band below about
+# 10000 cm-1 the margin put the axis below zero, where the top axis (1e7 / x) asked for 1e14
+# tick candidates (MemoryError: no report for a near-infrared dye). A dark state of low energy
+# must stay on the axis to show that it was computed; a dark state above the visible bands is
+# left out, as the states above the last computed one, which could cover it, are unknown.
+VISIBLE_SHARE = 0.005
+VIEW_MARGIN = 0.10
+MIN_TOP_TICKS = 3
+# Largest number of candidates nice_ticks tries for one spacing
+MAX_TICK_CANDIDATES = 10000
+# Dark states (stick below VISIBLE_SHARE of the largest one): open circles on the base line
+DARK_MARKER = dict(ls="none", marker="o", ms=4, mfc="white", mec="black", mew=0.8, zorder=3, clip_on=False)
+
+
+def unit_name(name):
+    """Unit of a spectrum axis from its name in the YAML file (wavenumber or cm-1, energy or
+    eV, wavelength or nm); ValueError otherwise."""
+    key = str(name).strip().lower()
+    if key not in UNIT_ALIASES:
+        raise ValueError(f"spectrum axis must be wavenumber (cm-1), energy (eV) or wavelength (nm), not {name!r}")
+    return UNIT_ALIASES[key]
+
+
+def set_spectrum_axis(axis, secondary="auto"):
+    """Main axis of the spectra (wavenumber, energy or wavelength, or cm-1, eV, nm) and unit of
+    the top axis: "auto" (nm, or cm-1 when the main axis is in nm), a unit, or None / "none"."""
+    global SPECTRUM_AXIS, SECONDARY_AXIS
+    main = unit_name(axis)
+    if secondary is None or str(secondary).lower() == "none":
+        top = None
+    elif str(secondary).lower() == "auto":
+        top = "wavenumber" if main == "wavelength" else "wavelength"
+    else:
+        top = unit_name(secondary)
+        if top == main:
+            raise ValueError(f"the secondary axis of the spectra must differ from the main one ({main})")
+    SPECTRUM_AXIS, SECONDARY_AXIS = main, top
+
+
+def to_cm(unit, values):
+    """Values in the given unit converted to cm-1 (spectrum_range)."""
+    return UNITS[unit_name(unit)]["to_cm"](values)
 
 
 def nice_ticks(lo, hi, to_main, steps, gap_per_char):
@@ -55,12 +121,43 @@ def nice_ticks(lo, hi, to_main, steps, gap_per_char):
     """
     width = lambda value: len(f"{value:g}")
     kept = []
+    if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+        return kept
     for step in steps:
+        if (hi - lo) / step > MAX_TICK_CANDIDATES:
+            continue
         for value in np.arange(np.ceil(lo / step) * step, hi + step / 2, step):
             if lo <= value <= hi and all(abs(to_main(value) - to_main(k)) >= gap_per_char * max(width(value), width(k))
                                          for k in kept):
                 kept.append(float(value))
     return sorted(kept)
+
+
+def view_range_cm(wavenumbers, y, sticks, heights):
+    """Range (cm-1) to show: from the lowest computed state (even a dark one) to the highest
+    visible band (VISIBLE_SHARE of the largest curve value or stick), see VISIBLE_SHARE."""
+    x, y = np.asarray(wavenumbers, dtype=float), np.abs(np.asarray(y, dtype=float))
+    sticks, heights = np.asarray(sticks, dtype=float), np.abs(np.asarray(heights, dtype=float))
+    finite = np.isfinite(sticks)
+    visible = [x[y > VISIBLE_SHARE * y.max()]] if y.size and y.max() > 0 else []
+    if heights.size and heights.max() > 0:
+        visible.append(sticks[finite & (heights > VISIBLE_SHARE * heights.max())])
+    visible = np.concatenate(visible) if visible else np.array([])
+    if not visible.size:                     # nothing visible: every state and the whole curve
+        visible = np.concatenate([x, sticks[finite]])
+    low = np.concatenate([visible, sticks[finite]])
+    return low.min(), visible.max()
+
+
+def main_axis_limits(wavenumbers, lo_cm, hi_cm, unit):
+    """Limits (main unit, increasing) of the range lo_cm-hi_cm widened by VIEW_MARGIN of its
+    span, within the computed grid (never at or below zero)."""
+    conv = UNITS[unit]["from_cm"]
+    a, b = sorted(conv(np.array([lo_cm, hi_cm])))
+    grid = np.asarray(wavenumbers, dtype=float)
+    g0, g1 = sorted(conv(np.array([grid[grid > 0].min(), grid.max()])))
+    margin = VIEW_MARGIN * (b - a) or 0.05 * b
+    return max(a - margin, g0), min(b + margin, g1)
 
 
 def _fit_ylim(axis, values, signed):
@@ -72,7 +169,8 @@ def _fit_ylim(axis, values, signed):
 
 def spectrum_figure(wavenumbers, curve, stick_positions, stick_heights, ylabel, stick_label,
                     file_name, signed=False, sci_sticks=False):
-    """Draw and save a spectrum (curve above, sticks below) on the chosen main axis.
+    """Draw and save a spectrum (curve above, sticks below) on the chosen main axis, with the
+    chosen unit on the top axis; dark states are open circles on the base line of the sticks.
 
     Parameters
     ----------
@@ -93,33 +191,22 @@ def spectrum_figure(wavenumbers, curve, stick_positions, stick_heights, ylabel, 
     """
     plt.close("all")
     fig, ax = plt.subplots(nrows=2, sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    unit = UNITS[SPECTRUM_AXIS]
     wavenumbers = np.asarray(wavenumbers, dtype=float)
+    keep = wavenumbers > 0
+    wavenumbers = wavenumbers[keep]
+    y = np.asarray(curve, dtype=float)[keep]
     sticks = np.asarray(stick_positions, dtype=float)
-    if SPECTRUM_AXIS == "wavelength":
-        keep = wavenumbers > 0
-        x, sx = _reciprocal(wavenumbers[keep]), _reciprocal(sticks)
-        ax[0].plot(x, np.asarray(curve)[keep])
+    heights = np.asarray(stick_heights, dtype=float)
+    x, sx = unit["from_cm"](wavenumbers), unit["from_cm"](sticks)
+    ax[0].plot(x, y)
+    if unit["reciprocal"]:
         # lines, not bars: a bar width in nm would not be the same in energy across the axis
-        ax[1].vlines(sx, 0, stick_heights, linewidth=2)
-        # The broadening grid reaches far in the red (1000 nm for an absorption at 140 nm):
-        # the axis is limited to where the curve or a stick is visible, with a margin
-        y = np.abs(np.asarray(curve, dtype=float)[keep])
-        seen = x[y > 0.005 * y.max()] if y.size and y.max() > 0 else x
-        span = np.concatenate([seen, sx[np.isfinite(sx)]])
-        if span.size:
-            lo, hi = span.min(), span.max()
-            margin = 0.1 * (hi - lo) + 5
-            ax[1].set_xlim(max(lo - margin, x.min()), min(hi + margin, x.max()))
-        main_label, top_label = r'Wavelength / nm', r'$\tilde{\nu}$ / cm$^{-1}$'
-        to_top = to_main = _reciprocal
-        steps = [10000, 5000, 2000, 1000]
+        ax[1].vlines(sx, 0, heights, linewidth=2)
     else:
-        x, sx = wavenumbers, sticks
-        ax[0].plot(x, curve)
-        ax[1].bar(sx, stick_heights, width=250)
-        main_label, top_label = r'Wavenumber / cm$^{-1}$', r'$\lambda$ / nm'
-        to_top = to_main = _reciprocal
-        steps = [100, 50, 20, 10]
+        ax[1].bar(sx, heights, width=float(unit["from_cm"](250.0)))
+    dark = np.abs(heights) <= VISIBLE_SHARE * np.abs(heights).max() if heights.size and np.abs(heights).max() > 0 \
+        else np.ones(heights.shape, dtype=bool)
     if signed:
         ax[0].axhline(y=0, color='black', ls='--')
     ax[0].set(ylabel=ylabel)
@@ -131,29 +218,47 @@ def spectrum_figure(wavenumbers, curve, stick_positions, stick_heights, ylabel, 
     if user is not None:
         # output.spectrum_range: the axis shows that range; the vertical scales follow what is
         # inside it
-        lo, hi = (sorted(_reciprocal(np.array(user))) if SPECTRUM_AXIS == "wavelength" else user)
+        lo, hi = sorted(unit["from_cm"](np.array(user, dtype=float)))
         ax[1].set_xlim(lo, hi)
         inside = (x >= lo) & (x <= hi)
-        y = np.asarray(curve, dtype=float)[keep] if SPECTRUM_AXIS == "wavelength" else np.asarray(curve, dtype=float)
         if inside.any():
             _fit_ylim(ax[0], y[inside], signed)
-        heights = np.asarray(stick_heights, dtype=float)
         in_sticks = (sx >= lo) & (sx <= hi)
         if in_sticks.any():
             _fit_ylim(ax[1], heights[in_sticks], True)
-    if SPECTRUM_AXIS == "wavenumber":
-        ax[1].invert_xaxis()
-    ax[1].set_xlabel(main_label)
+    elif wavenumbers.size:
+        ax[1].set_xlim(*main_axis_limits(wavenumbers, *view_range_cm(wavenumbers, y, sticks, heights),
+                                         SPECTRUM_AXIS))
+    # Dark states inside the axis only: the markers are not clipped (a circle on the base line
+    # would be cut in half), and one far outside made tight_layout squeeze the whole figure
+    lo, hi = sorted(ax[1].get_xlim())
+    shown = dark & np.isfinite(sx) & (sx >= lo) & (sx <= hi)
+    if shown.any():
+        ax[1].plot(sx[shown], np.zeros(int(shown.sum())), **DARK_MARKER)
+        ax[1].set_xlim(lo, hi)
+    if not unit["reciprocal"]:
+        ax[1].invert_xaxis()                 # energy decreasing to the right, as the wavelength increases
+    ax[1].set_xlabel(unit["label"])
     for a in ax:
         a.minorticks_on()
-    left, right = sorted(ax[0].get_xlim())
-    secax = ax[0].secondary_xaxis('top', functions=(to_top, to_main))
-    secax.set_xlabel(top_label)
-    top_values = to_top(np.array([max(left, 1e-9), right]))
-    ticks = nice_ticks(np.nanmin(top_values), np.nanmax(top_values), to_main, steps,
-                       TOP_TICK_GAP_PER_CHAR * (right - left))
-    secax.xaxis.set_major_locator(FixedLocator(ticks))
-    secax.xaxis.set_minor_locator(NullLocator())
+    if SECONDARY_AXIS is not None:
+        top = UNITS[SECONDARY_AXIS]
+        to_top = lambda v: top["from_cm"](unit["to_cm"](v))
+        to_main = lambda v: unit["from_cm"](top["to_cm"](v))
+        left, right = sorted(ax[0].get_xlim())
+        secax = ax[0].secondary_xaxis('top', functions=(to_top, to_main))
+        secax.set_xlabel(top["top"])
+        top_values = to_top(np.array([max(left, 1e-9), right]))
+        gap = TOP_TICK_GAP_PER_CHAR * (right - left)
+        lo_top, hi_top = np.nanmin(top_values), np.nanmax(top_values)
+        ticks = nice_ticks(lo_top, hi_top, to_main, top["steps"], gap)
+        if len(ticks) < MIN_TOP_TICKS:
+            ticks = nice_ticks(lo_top, hi_top, to_main, top["steps"] + top["finer"], gap)
+        secax.xaxis.set_major_locator(FixedLocator(ticks))
+        # the labels as nice_ticks measured them ("7", "7.5"; matplotlib wrote "7.0" for the eV
+        # ticks, wider than measured, and two of them touched)
+        secax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+        secax.xaxis.set_minor_locator(NullLocator())
     fig.set_size_inches(6, 6)
     # the label of the sticks was cut at the left edge
     fig.tight_layout()

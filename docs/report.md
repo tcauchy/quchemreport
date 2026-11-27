@@ -43,9 +43,10 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
    the log when singlets and triplets are mixed; spatial symmetry; wavelength, wavenumber,
    oscillator and rotatory strengths, R in the length and velocity gauges when the log gives the
    velocity and magnetic transition dipoles (Gaussian); Lambda, d_CT in pm, q_CT in e; main excitations in %
-   named from the HOMO and LUMO, e.g. H-1->L), absorption and CD spectra (Gaussian bands,
-   3000 cm-1 wide; main axis in wavenumber or wavelength, `output.spectrum_axis`; range: every
-   computed band with three widths on each side, or `output.spectrum_range`), density
+   named from the HOMO and LUMO, e.g. H-1->L), absorption and CD spectra (CD only for a chiral molecule; Gaussian bands,
+   3000 cm-1 wide; axes in cm-1, eV or nm, `output.spectrum_axis` and
+   `spectrum_secondary_axis`; range: from the lowest computed state, dark states as open circles, to
+   the last visible band, with a 10 % margin, or `output.spectrum_range`), density
    differences and natural transition orbitals shown as grids of the selected states.
    Open-shell reference (e.g. triplet O2): TD-DFT only gives the states with the same spin
    projection, named after the multiplicity of the reference (T1, T2... for a triplet; D1... for

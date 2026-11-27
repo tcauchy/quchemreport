@@ -12,6 +12,7 @@ import json
 import sys
 from quchemreport.config.config import Config
 from quchemreport.data_enrichment.compute_flags import ComputeFlags
+from quchemreport.data_enrichment.compute import is_chiral
 from quchemreport.utility_services.computed_data import ComputedData, config_logfile
 from quchemreport.visualization_engine import visu_mayavi, visu_plots, visu_txt
 from quchemreport.data_enrichment import calc_orb
@@ -346,13 +347,12 @@ def output_es_absorption_and_CD_spectrum(computed_data: ComputedData, do_cd, do_
             continue
     
         
-        # Output calculated CD spectra in text files and figures
-        if (
-            do_cd 
-            and CD_spectrum is not None 
-            and len(CD_spectrum) != 0
-            and et_rotats is not None
-        ):
+        # Output calculated CD spectra in text files and figures, for a chiral molecule only: the
+        # rotatory strengths of an achiral one are numerical noise (acetone: 4e-4), drawn as a
+        # meaningless CD spectrum (27/11/2026, Thomas Cauchy; the report says why it is missing)
+        draw_cd = (do_cd and CD_spectrum is not None and len(CD_spectrum) != 0
+                   and et_rotats is not None and is_chiral(et_rotats))
+        if draw_cd:
             print(f"Generating Circular dichroism spectrum done for {log_file} ...")
             # Write both Absorption and Circular dichroism spectra in text file to compare with experimental data
             visu_txt.textfile_CD(xvalues, abso_spectrum, CD_spectrum, file_name=output_dir+f"log{log_idx + 1}-",)                        
@@ -367,12 +367,8 @@ def output_es_absorption_and_CD_spectrum(computed_data: ComputedData, do_cd, do_
         ):
             print(f"Generating Absorption spectrum done for {log_file}.")
             # If no CD write only Absorption spectrum in text file to compare with experimental data
-            # CD_spectrum is None when all the rotatory strengths are 0 (achiral molecule)
-            if (
-                not do_cd
-                or CD_spectrum is None
-                or len(CD_spectrum) == 0
-            ):
+            # (no CD spectrum: none asked, none computed, or an achiral molecule)
+            if not draw_cd:
                 visu_txt.textfile_UV(xvalues, abso_spectrum, file_name=output_dir+f"log{log_idx + 1}-")       
 
             # Plotting UV spectrum 
@@ -544,14 +540,13 @@ def output_optimized_es_absorption_and_CD_spectrum(computed_data: ComputedData, 
         ):
             continue
         
+        # CPL for a chiral molecule only, as the CD spectra
+        draw_cpl = (do_CPL and CPL_spectrum is not None and len(CPL_spectrum) != 0
+                    and et_rot is not None and is_chiral(et_rot))
         if (
             do_emi
         ):
-            if (
-                do_CPL
-                and CPL_spectrum is not None
-                and len(CPL_spectrum) != 0
-            ):
+            if draw_cpl:
                 # Write both Emission and CPL spectra in text file to compare with experimental data
                 visu_txt.textfile_emiCD(xvalues, emi_spectrum, CPL_spectrum, file_name=output_dir+f"log{log_idx + 1}-") 
             # If no CPL write only Emission spectrum in text file to compare with experimental data
@@ -562,11 +557,7 @@ def output_optimized_es_absorption_and_CD_spectrum(computed_data: ComputedData, 
             visu_plots.emiUV([emi_energy], [emi_osc], xvalues, emi_spectrum, file_name=output_dir+f"img-log{log_idx + 1}")
             print(f"Generating Emission spectrum done for {log_file}.")            
         
-        if (
-            do_CPL
-            and CPL_spectrum is not None
-            and len(CPL_spectrum) != 0
-        ):
+        if draw_cpl:
             # plot CPL spectrum 
             visu_plots.emiCD([emi_energy], [emi_rotat], xvalues, CPL_spectrum, file_name=output_dir+f"img-log{log_idx + 1}")
             print(f"CPL spectrum done for {log_file}.") 

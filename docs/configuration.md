@@ -93,8 +93,9 @@ All checks default to `true`.
 | `image_size` | 1200 | Side of the square 3D pictures, in pixels (200 to 8000). 1200 px is 360 dpi in an 8.5 cm column; 2000 px is 600 dpi. |
 | `image_grid_reduction` | 2 | The orbital, MEP and NTO pictures are drawn on every k-th point of the computation grid (0.075 bohr): 1 = full grid, 2 = 0.15 bohr (2.5 to 3 times faster to draw). The numerical results always use the full grid. |
 | `image_grid_reduction_sensitive` | 1 | Same, for the density differences (EDD, Fukui functions), which are more sensitive. |
-| `spectrum_axis` | `wavenumber` | Main axis of the UV-visible, CD, emission, CPL and phosphorescence spectra: `wavenumber` (cm⁻¹, linear in energy) or `wavelength` (nm, as most experimental spectra). The other unit is on the top axis. |
-| `spectrum_range` | automatic | Range of the spectra on the main axis, in its unit (cm⁻¹ for `wavenumber`, nm for `wavelength`), for example `[200, 600]`. Automatic: every computed band, with three band widths (FWHM, 3000 cm⁻¹) on each side. |
+| `spectrum_axis` | `wavenumber` | Main axis of the UV-visible, CD, emission, CPL and phosphorescence spectra: `wavenumber` (or `cm-1`) and `energy` (or `eV`), linear in energy and decreasing to the right, or `wavelength` (or `nm`, as most experimental spectra). |
+| `spectrum_secondary_axis` | `auto` | Unit of the top axis of the spectra: `auto` (nm, or cm⁻¹ when the main axis is in nm), `wavenumber`/`cm-1`, `energy`/`eV`, `wavelength`/`nm` (different from the main axis), or `none` (no top axis). |
+| `spectrum_range` | automatic | Range of the spectra on the main axis, in its unit (cm⁻¹, eV or nm), for example `[200, 600]` in nm. Automatic: from the lowest computed state, even a dark one (shown as an open circle), to the last band that can be seen (curve or stick above 0.5 % of the largest), with a margin of 10 % of that range on each side. A dark state above the visible bands is left out: the states above the last computed one, which could cover it, are unknown. |
 | `camera_views` | `auto` | Views of the 3D pictures: `auto` (a second picture, at 60-90 degrees, only when one view is not enough, see [The report](report.md)), `1` (never a second picture) or `2` (always, for example to show a stereocentre from two sides; linear molecules keep one view, their side views being all the same). |
 | `colors` | see below | Colours of the iso-surfaces of the 3D pictures, below. |
 | `renderer` | `vtk` | Renderer of the 3D pictures: `vtk`, or `povray` for ray-traced pictures (anti-aliased edges, soft shadows, ambient occlusion), about 4 s more per 1200 px picture with 16 threads. The scene and camera are those of VTK, so the framing and the labels are the same. Without POV-Ray, a warning is printed and VTK renders the pictures. |
@@ -175,7 +176,7 @@ anion at the reference geometry (type `sp`).
 | `selection.mode` | States shown: `dominant_only` (the first five, then the intense ones), `first_n` or `all_states`. |
 | `selection.first_n` | Number of states for `first_n`. |
 | `transitions` | Table of the states (wavelength, strengths, main excitations, charge-transfer indices). |
-| `absorption_spectrum`, `CD_spectrum` | Spectra (Gaussian broadening). |
+| `absorption_spectrum`, `CD_spectrum` | Spectra (Gaussian broadening). The CD spectrum (and the CPL spectrum of an optimized excited state) is only drawn for a chiral molecule (a rotatory strength above 0.001 × 10⁻⁴⁰ cgs); otherwise the report says why it is missing. |
 | `electron_density_difference` | 3D pictures of the density difference of each selected state. |
 | `natural_transition_orbitals.enabled` | Natural transition orbitals of the selected states (default `false`). |
 | `natural_transition_orbitals.max_pairs` | Pairs shown per state (default 2). |

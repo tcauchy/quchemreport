@@ -200,3 +200,108 @@ def test_last_geometry_xyz_for_open_babel():
     first = lines[2].split()
     assert first[0] == cclib.parser.utils.PeriodicTable().element[int(data.atomnos[0])]
     assert [float(x) for x in first[1:]] == pytest.approx(list(data.atomcoords[-1][0]), abs=1e-9)
+
+
+def _spectrum_axes(energies, foscs, axis, tmp_path, user=None, top="auto", markers=False):
+    """Main and top axes of a spectrum drawn by visu_plots.spectrum_figure (FWHM 3000 cm-1):
+    limits of the main axis, top ticks (None without a top axis), and with markers=True the
+    positions of the dark-state circles."""
+    import matplotlib.pyplot as plt
+    from quchemreport.data_enrichment import TD2UVvis
+    from quchemreport.visualization_engine import visu_plots as vp
+    vp.set_spectrum_axis(axis, top)
+    TD2UVvis.set_user_range(user)
+    try:
+        start, end, n = TD2UVvis.spectrum_grid(energies, 3000.0)
+        x, spec = TD2UVvis.GaussianSpectrum(start, end, n, energies, [foscs], 3000.0)
+        close = vp.plt.close
+        vp.plt.close = lambda *a, **k: None
+        try:
+            vp.spectrum_figure(x, spec[0], energies, foscs, "eps", "f", str(tmp_path / "s.png"))
+            fig = plt.gcf()
+        finally:
+            vp.plt.close = close
+        lo, hi = sorted(fig.axes[1].get_xlim())
+        children = fig.axes[0].child_axes
+        ticks = [float(t) for t in children[0].get_xticks()] if children else None
+        circles = [float(v) for line in fig.axes[1].get_lines() if line.get_marker() == "o" for v in line.get_xdata()]
+        plt.close(fig)
+        return (lo, hi, ticks, circles) if markers else (lo, hi, ticks)
+    finally:
+        vp.set_spectrum_axis("wavenumber")
+        TD2UVvis.set_user_range(None)
+
+
+def test_spectrum_of_a_near_infrared_band(tmp_path):
+    """A band at 9000 cm-1: the axis stays above the start of the grid (the margins of
+    matplotlib put it below zero, and the top axis asked for 1e14 tick candidates)."""
+    lo, hi, top = _spectrum_axes([9000, 15000, 30000], [1.2, 0.3, 0.5], "wavenumber", tmp_path)
+    assert lo >= 1000 and hi > 30000 and 3 <= len(top) <= 12
+
+
+@pytest.mark.parametrize("axis", ["wavenumber", "wavelength"])
+def test_spectrum_range_is_where_something_is_visible(tmp_path, axis):
+    """Both axes are cut to the visible curve and sticks with a 10 % margin: one band fills
+    most of the axis (42 % on the wavenumber axis before)."""
+    lo, hi, _ = _spectrum_axes([20000], [0.5], axis, tmp_path)
+    band = (15000, 25000) if axis == "wavenumber" else (400, 667)
+    assert lo > band[0] - 0.25 * (band[1] - band[0]) and hi < band[1] + 0.25 * (band[1] - band[0])
+    assert lo < 20000 < hi if axis == "wavenumber" else lo < 500 < hi
+
+
+def test_narrow_user_range_gets_finer_top_ticks(tmp_path):
+    """400-420 nm on the wavelength axis: finer cm-1 ticks when the round ones are too few."""
+    _, _, top = _spectrum_axes([24000, 25000], [0.5, 0.2], "wavelength", tmp_path, user=(1e7 / 420, 1e7 / 400))
+    assert len(top) >= 3
+
+
+@pytest.mark.parametrize("axis, top", [("eV", "nm"), ("nm", "eV"), ("cm-1", "eV"), ("energy", "none")])
+def test_spectrum_axis_combinations(tmp_path, axis, top):
+    """Main axis in cm-1, eV or nm, top axis in another unit or none (Thomas Cauchy, 27/11/2026)."""
+    from quchemreport.visualization_engine import visu_plots as vp
+    lo, hi, ticks = _spectrum_axes([20000, 30000], [0.5, 0.3], axis, tmp_path, top=top)
+    band = sorted(vp.UNITS[vp.unit_name(axis)]["from_cm"](np.array([20000.0, 30000.0])))
+    assert lo < band[0] and hi > band[1]
+    assert ticks is None if top == "none" else len(ticks) >= 3
+
+
+def test_low_dark_state_is_shown_high_one_is_not(tmp_path):
+    """A dark state below the visible bands keeps the axis down to it (open circle); a dark state
+    above them does not widen the axis (the states above the last computed one are unknown)."""
+    lo, hi, _, circles = _spectrum_axes([22000, 36000, 40000, 70000], [0.0, 0.4, 0.2, 0.0], "wavenumber",
+                                        tmp_path, markers=True)
+    assert lo < 22000 < hi < 70000
+    assert circles == [22000.0]
+
+
+def test_spectrum_axis_names():
+    from quchemreport.visualization_engine import visu_plots as vp
+    assert [vp.unit_name(n) for n in ("cm-1", "eV", "NM", "energy")] == ["wavenumber", "energy", "wavelength", "energy"]
+    with pytest.raises(ValueError):
+        vp.unit_name("Hz")
+    with pytest.raises(ValueError):
+        vp.set_spectrum_axis("nm", "wavelength")
+    try:
+        vp.set_spectrum_axis("nm")
+        assert vp.SECONDARY_AXIS == "wavenumber"
+        vp.set_spectrum_axis("eV")
+        assert vp.SECONDARY_AXIS == "wavelength"
+    finally:
+        vp.set_spectrum_axis("wavenumber")
+    assert vp.to_cm("eV", [1.0])[0] == pytest.approx(8065.544, abs=1e-3)
+
+
+def test_dark_states_note():
+    from quchemreport.report_generator import generate_report as gr
+    assert gr.dark_states_note([0.5, 0.2]) == ""
+    assert "Open circles" in gr.dark_states_note([0.0, 0.5]) and gr.dark_states_note(None) == ""
+
+
+def test_no_cd_spectrum_for_an_achiral_molecule():
+    """The rotatory strengths of an achiral molecule are numerical noise (acetone: 4e-4): no CD or
+    CPL spectrum, a sentence instead (Thomas Cauchy, 27/11/2026)."""
+    from quchemreport.report_generator import generate_report as gr
+    note = gr.achiral_note([0.0001, -0.0004], "circular dichroism", "TD.log")
+    assert note.startswith("No circular dichroism spectrum") and "TD.log" in note and "4.0e-04" in note
+    assert gr.achiral_note([0.0, -13.56], "circular dichroism", "TD.log") == ""
+    assert gr.achiral_note(None, "circular dichroism", "TD.log") == ""

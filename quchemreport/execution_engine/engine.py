@@ -48,11 +48,11 @@ def run(config: Config):
     from quchemreport.utility_services import parameters
     parameters.set_surface_colors(config.output.colors.as_dict())
     from quchemreport.visualization_engine import visu_plots
-    visu_plots.set_spectrum_axis(config.output.spectrum_axis)
+    visu_plots.set_spectrum_axis(config.output.spectrum_axis, config.output.spectrum_secondary_axis)
     from quchemreport.data_enrichment import TD2UVvis
     rng = config.output.spectrum_range
-    if rng is not None and config.output.spectrum_axis == "wavelength":
-        rng = [1.0e7 / x for x in rng]          # nm -> cm-1
+    if rng is not None:
+        rng = [float(x) for x in visu_plots.to_cm(config.output.spectrum_axis, rng)]   # main unit -> cm-1
     TD2UVvis.set_user_range(rng)
     nto = config.output.include.excited_states.natural_transition_orbitals
     if nto.grid_step is not None or nto.nproc is not None:

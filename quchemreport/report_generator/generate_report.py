@@ -1973,6 +1973,29 @@ def velocity_rotatory_strengths(computed_data: ComputedData, log_idx):
     return rotatory_strengths_velocity(es.et_energies[log_idx], es.et_veldips[log_idx], es.et_magdips[log_idx])
 
 
+def achiral_note(rotatory_strengths, spectrum, source):
+    """Sentence replacing a CD or CPL spectrum asked for an achiral molecule (compute.is_chiral),
+    or "" when the molecule is chiral or has no rotatory strengths."""
+    from quchemreport.data_enrichment.compute import is_chiral, CHIRAL_ROTATORY_STRENGTH
+    values = [abs(r) for r in (rotatory_strengths or []) if r is not None]
+    if not values or is_chiral(values):
+        return ""
+    return (f"No {spectrum} spectrum: every rotatory strength of {source} is below {CHIRAL_ROTATORY_STRENGTH:g} "
+            f"(1e-40 erg.esu.cm/G; largest {max(values):.1e}), so the molecule is not chiral and these values are "
+            "numerical noise.\n")
+
+
+def dark_states_note(heights):
+    """Caption sentence for the open circles of the spectra (visu_plots.DARK_MARKER), or "" when
+    no stick is below visu_plots.VISIBLE_SHARE of the largest one."""
+    from quchemreport.visualization_engine.visu_plots import VISIBLE_SHARE
+    values = [abs(h) for h in (heights or []) if h is not None]
+    if not values or not any(v <= VISIBLE_SHARE * max(values) for v in values):
+        return ""
+    return (f" Open circles: states too weak to be seen (below {100 * VISIBLE_SHARE:g} % of the largest stick); "
+            "the axis reaches the lowest computed state, even a dark one.")
+
+
 def render_excited_state_transitions_table(doc, computed_data: ComputedData, log_idx, is_optimized=False, indices=None, report_type="full", title=""):
 
     """Table of the selected excited states of a model: symmetry, wavelength (nm) and
@@ -2224,7 +2247,9 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
         imgNameAbso = f"img-log{log_idx + 1}-UV-Abso-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameAbso)) :
             figure_one_col(section, imgNameAbso, taillePng="10cm", 
-                caption=f"Calculated UV-visible absorption spectrum with a Gaussian broadening (FWHM = 3000 cm-1). (Source: {log_file})"
+                caption=("Calculated UV-visible absorption spectrum with a Gaussian broadening (FWHM = 3000 cm-1)."
+                         + dark_states_note(computed_data.results.excited_states.et_oscs[log_idx])
+                         + f" (Source: {log_file})")
             )
             content_added = True
             
@@ -2233,9 +2258,16 @@ def render_es_absorption_and_CD_spectrum(section, output_dir, computed_data: Com
         imgNameCD= f"img-log{log_idx + 1}-UV-CD-Spectrum.png"
         if (os.path.isfile(output_dir + imgNameCD)) :
             figure_one_col(section, imgNameCD, taillePng="10cm", 
-                caption=f"Calculated circular dichroism spectrum with a Gaussian broadening (FWHM = 3000 cm-1). (Source: {log_file})"
+                caption=("Calculated circular dichroism spectrum with a Gaussian broadening (FWHM = 3000 cm-1)."
+                         + dark_states_note(computed_data.results.excited_states.et_rot[log_idx])
+                         + f" (Source: {log_file})")
             )
             content_added = True
+        elif computed_data.derived.excited_states.CD_spectrum[log_idx] is not None:
+            note = achiral_note(computed_data.results.excited_states.et_rot[log_idx], "circular dichroism", log_file)
+            if note:
+                section.append(note)
+                content_added = True
             
         if (
             isContentAdded == False
@@ -2821,6 +2853,12 @@ def render_optimized_es_CPL_spectrum(section, output_dir, computed_data: Compute
     
         imgNamePng = f"img-log{log_idx + 1}-UV-CD-Emi-Spectrum.png"
         if (not os.path.isfile(output_dir + imgNamePng)) :
+            if computed_data.derived.optimized_excited_states.CPL_spectrum[log_idx] is not None:
+                note = achiral_note(computed_data.results.excited_states.et_rot[log_idx],
+                                    "circularly polarized luminescence", log_files[log_idx])
+                if note:
+                    section.append(note)
+                    isContentAdded = True
             continue
         
         figure_one_col(section, imgNamePng, taillePng="10cm", 

@@ -336,12 +336,15 @@ class Output(BaseModel):
     image_grid_reduction: int = Field(default=2, ge=1, le=10)
     # Sensitive surfaces (density differences): EDD, Oif, Fukui, Fdual.
     image_grid_reduction_sensitive: int = Field(default=1, ge=1, le=10)
-    # Main axis of the UV-visible, CD, emission and phosphorescence spectra: wavenumber
-    # (cm-1, linear in energy) or wavelength (nm, as most experimental spectra); the other
-    # unit is on the top axis.
+    # Main axis of the UV-visible, CD, emission and phosphorescence spectra: wavenumber (or
+    # cm-1), energy (or eV), both linear in energy, or wavelength (or nm, as most experimental
+    # spectra).
     spectrum_axis: str = "wavenumber"
-    # Range of the spectra on the main axis, in its unit (cm-1 for wavenumber, nm for
-    # wavelength), e.g. [200, 600]; omitted: every computed band with 3 FWHM on each side.
+    # Unit of the top axis of the spectra: auto (nm, or cm-1 when the main axis is in nm), a
+    # unit as for spectrum_axis (different from it), or none.
+    spectrum_secondary_axis: Optional[str] = "auto"
+    # Range of the spectra on the main axis, in its unit (cm-1, eV or nm), e.g. [200, 600];
+    # omitted: from the lowest computed state to the last visible band, with a margin.
     spectrum_range: Optional[List[float]] = None
 
     @field_validator("spectrum_range")
@@ -390,11 +393,32 @@ class Output(BaseModel):
 
     @field_validator("spectrum_axis")
     def validate_spectrum_axis(cls, v: str) -> str:
-        """Accept wavenumber or wavelength."""
-        v_lower = v.lower()
-        if v_lower not in {"wavenumber", "wavelength"}:
-            raise ValueError(f"Output spectrum_axis must be wavenumber or wavelength. Not '{v_lower}' .")
-        return v_lower
+        """wavenumber (cm-1), energy (eV) or wavelength (nm), returned as the unit name."""
+        from quchemreport.visualization_engine.visu_plots import unit_name
+        try:
+            return unit_name(v)
+        except ValueError:
+            raise ValueError(f"Output spectrum_axis must be wavenumber (cm-1), energy (eV) or wavelength (nm). Not '{v}' .")
+
+    @field_validator("spectrum_secondary_axis")
+    def validate_spectrum_secondary_axis(cls, v) -> str:
+        """auto, none, or a unit as for spectrum_axis (YAML null is none)."""
+        if v is None or str(v).strip().lower() in ("none", "auto"):
+            return "none" if v is None else str(v).strip().lower()
+        from quchemreport.visualization_engine.visu_plots import unit_name
+        try:
+            return unit_name(v)
+        except ValueError:
+            raise ValueError(f"Output spectrum_secondary_axis must be auto, none, wavenumber (cm-1), energy (eV) "
+                             f"or wavelength (nm). Not '{v}' .")
+
+    @model_validator(mode="after")
+    def check_spectrum_axes(self):
+        """The top axis of the spectra must differ from the main one."""
+        if self.spectrum_secondary_axis == self.spectrum_axis:
+            raise ValueError(f"Output spectrum_secondary_axis must differ from spectrum_axis ({self.spectrum_axis}); "
+                             "use none for no top axis.")
+        return self
 
     @field_validator("format")
     def validate_format(cls, v: str) -> str:

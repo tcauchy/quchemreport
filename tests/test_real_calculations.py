@@ -256,6 +256,8 @@ def test_h2co_full_report(solver):
     assert sorted(f.replace("-TDEN-", "-TDIP-") for f in second if "-TDEN-" in f) == \
         sorted(f for f in second if "-TDIP-" in f)
     assert "fukui functions" in report.tex.lower()
+    # Achiral molecule: no CD spectrum even if asked (example.yaml), 27/11/2026
+    assert not report.images("UV-CD-Spectrum") and not report.images("UV-CD-Emi-Spectrum")
 
 
 def _td_without_amplitudes():
