@@ -38,10 +38,24 @@ See [docs/](docs/README.md):
 
 ## Requirements
 
-Python 3.12 with NumPy, SciPy, pydantic, PyYAML, cclib (with two changes not released yet:
-cclib pull requests #1972 and #1973), Open Babel with its Python bindings, QMCkl, Mayavi/VTK,
-matplotlib, pylatex, and a LaTeX distribution (`pdflatex`). orbkit is only needed to compare with
-the former grid engine.
+Python 3.12 with NumPy, SciPy, pydantic, PyYAML, cclib, Open Babel with its Python bindings,
+QMCkl, Mayavi/VTK, matplotlib, pylatex, and a LaTeX distribution (`pdflatex`). orbkit is only
+needed to compare with the former grid engine.
+
+cclib: use its development version (GitHub master); the release 1.8.1 cannot read ORCA 6 outputs.
+Some cclib changes made for QuChemReport are not merged yet. Without them the reports are still
+made (tested with cclib master on the whole test suite), with these losses:
+
+| cclib change | Without it |
+|---|---|
+| core electrons with ECPs (PR #1972) | no MEP map for molecules with effective core potentials (skipped with a message) |
+| dispersion model (PR #1973) | the dispersion is not compared: B3LYP and B3LYP-D3(BJ) logs are not told apart |
+| Gaussian de-excitation amplitudes Y | transition densities from the X amplitudes only (marked approximate) |
+| ORCA transition dipoles | ORCA: transition dipoles computed from the amplitudes |
+| ORCA velocity and magnetic transition dipoles | ORCA: no magnetic dipole arrow and no R(velocity) |
+| ORCA negative RPA weights | ORCA `tda false` with `tprint` below the default: cclib stops |
+
+The installation of the laboratory (`/applis/cclib`) has all of them.
 
 ## History
 

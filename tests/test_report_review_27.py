@@ -185,3 +185,18 @@ def test_orca_opt_freq_in_one_job(monkeypatch):
     cd.comp_details.general.job_type[0] = ["opt", "freq"]
     rows = gr.logfile_rows(cd, config=None)
     assert rows[0][0] == "Ground-state optimization and frequencies"
+
+
+def test_last_geometry_xyz_for_open_babel():
+    """The XYZ block given to Open Babel is built from atomnos and atomcoords: cclib master after
+    1.8.1 raised IndexError in its XYZ writer for every Gaussian optimization (27/11/2026)."""
+    import cclib
+    from quchemreport.parser_engine.scanlog import last_geometry_xyz
+    from tests.datafiles import log
+    data = cclib.io.ccread(log("gaussian/h2co/OPT.log"))
+    assert len(data.atomcoords) > 1
+    lines = last_geometry_xyz(data).splitlines()
+    assert lines[0] == str(len(data.atomnos)) and len(lines) == len(data.atomnos) + 2
+    first = lines[2].split()
+    assert first[0] == cclib.parser.utils.PeriodicTable().element[int(data.atomnos[0])]
+    assert [float(x) for x in first[1:]] == pytest.approx(list(data.atomcoords[-1][0]), abs=1e-9)

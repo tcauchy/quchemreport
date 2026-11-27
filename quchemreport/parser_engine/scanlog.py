@@ -895,6 +895,23 @@ def full_report(logfile, data_json, data, obdata, verbose=False):
     return data_model
 
 
+def last_geometry_xyz(data):
+    """XYZ block of the last geometry read by cclib (atomnos, atomcoords in Angstrom), in the
+    format of cclib's XYZ writer, for Open Babel.
+
+    Why not data.writexyz() (27/11/2026): in cclib master after 1.8.1 (commit 58814731, "XYZ:
+    remove -1 as sentinel"), the writer takes the comment of the last geometry as
+    metadata["comments"][n_geometries - 1], but Gaussian stores one comment per job: every
+    Gaussian optimization raised IndexError, so no report could be made with that cclib. The
+    block is built here from the two attributes every cclib version gives."""
+    table = cclib.parser.utils.PeriodicTable()
+    coords = data.atomcoords[-1]
+    lines = [str(len(data.atomnos)), "Last geometry"]
+    lines += ["{:3s} {:15.10f} {:15.10f} {:15.10f}".format(table.element[int(z)], *xyz)
+              for z, xyz in zip(data.atomnos, coords)]
+    return "\n".join(lines) + "\n"
+
+
 def logfile_to_obj(logfile, verbose=False):
     # reading with cclib
     """Read one step file into a LogData model.
@@ -916,7 +933,7 @@ def logfile_to_obj(logfile, verbose=False):
     data.quchemreport_logfile = os.path.basename(logfile)  # for messages only
     data_json = json.loads(data.writejson())
     # openbabel sur XYZ
-    obdata = pybel.readstring("xyz", data.writexyz())
+    obdata = pybel.readstring("xyz", last_geometry_xyz(data))
     # construct raw data object 
     data_model = full_report(logfile, data_json, data, obdata, verbose=verbose)
     thermal = _electronic_thermal_energy(logfile)
