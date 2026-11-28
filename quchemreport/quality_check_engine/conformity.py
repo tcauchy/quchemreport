@@ -33,7 +33,8 @@ class ExtractedData:
     Lists have one value per model, in the order of the parsed models, except those whose
     name says which models they keep: ``nres_noES`` (no optimized excited state),
     ``charges_noSP`` / ``multiplicities_noSP`` (no single point), ``charges_SP``.
-    ``formulas_nocharges`` are the formulas without the charge that Open Babel appends.
+    ``formulas_nocharges`` are the formulas without the charge signs that
+    molecule_graph.formula appends (as Open Babel did).
     """
     nb_files: int
     packages: List[str]

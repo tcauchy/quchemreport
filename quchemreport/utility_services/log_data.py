@@ -1,6 +1,6 @@
 """LogData: the data read from one calculation step (pydantic model).
 
-scanlog.logfile_to_obj fills one LogData per step of a log file, from cclib and Open Babel.
+scanlog.logfile_to_obj fills one LogData per step of a log file, from cclib, RDKit and Open Babel.
 The model has four sections: ``metadata`` (file, parser), ``molecule`` (composition, charge,
 connectivity, starting geometry), ``comp_details`` (program, method, basis set, options) and
 ``results`` (wavefunction, geometry, frequencies, excited states). Units are those of cclib:
@@ -59,20 +59,20 @@ class Metadata(CustomModel):
 
 
 class MoleculeConnectivity(CustomModel):
-    """Bonds (Open Babel): atom index pairs, both directions, and bond orders."""
+    """Bonds of the last geometry (utility_services.molecule_graph): atom index pairs, both
+    directions. No bond orders: nothing used them (removed on 28/11/2026)."""
     atom_pairs: List[Tuple[int, int]] = None
-    bond_orders: List[int] = None
 
 
 class Molecule(CustomModel):
     """Composition and identity of the molecule: formula, atoms, charge, multiplicity, InChI,
     SMILES, bonds and the starting geometry and energy of the calculation.
     """
-    chirality: bool = None
-    atoms_valence: List[int] = None
+    # chirality, atoms_valence and the canonical SMILES 'can' (Open Babel) were removed on
+    # 28/11/2026: nothing used them; whether a CD spectrum is drawn depends on the rotatory
+    # strengths, not on a perceived chirality.
     inchi: str = None
     smi: str = None
-    can: str = None
     monoisotopic_mass: float = None
     connectivity: MoleculeConnectivity = MoleculeConnectivity()
     formula: str = None

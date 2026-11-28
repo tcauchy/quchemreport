@@ -24,6 +24,8 @@ group share one number in the picture and one line in the table.
 """
 import numpy as np
 
+from quchemreport.utility_services.molecule_graph import symmetry_classes
+
 # Isovalue of the electron density (e-/bohr3) for the surface of the MEP maps and extrema
 MEP_SURFACE_ISOVALUE = 0.001
 # Two extrema of the same kind are at least this far apart (bohr)
@@ -55,7 +57,7 @@ EXTREMA_RADIUS = 1.0
 #   times faster than the same loop reading numpy arrays element by element).
 PROMINENCE_MIN = 0.5 / 627.509
 # Equivalent extrema: same kind, nearest atoms in the same symmetry class of the molecular graph
-# (Open Babel, OBGraphSym) and values within EQUIVALENT_TOL (hartree/e; 0.3 kcal/mol), chained.
+# (molecule_graph.symmetry_classes; Open Babel OBGraphSym until 28/11/2026) and values within EQUIVALENT_TOL (hartree/e; 0.3 kcal/mol), chained.
 # Why (same study): the class alone is not enough, since atoms equivalent in the graph can differ
 # by several kcal/mol through the conformation (median 2.1 kcal/mol between extrema of the same
 # class); the differences between symmetry equivalents come from the grid (21 % of the pairs of
@@ -214,31 +216,6 @@ def group_prominences(values, neighbours, kind, group_of_vertex):
     for vertex, group in group_of_vertex.items():
         best[group] = max(best.get(group, 0.0), ended.get(vertex, 0.0))
     return {vertex: best[group] for vertex, group in group_of_vertex.items()}
-
-
-def symmetry_classes(atoms_Z, coords):
-    """Symmetry class of each atom in the molecular graph (Open Babel OBGraphSym, bonds perceived
-    from the geometry); one class per atom when atoms_Z is None or Open Babel fails.
-
-    atoms_Z: atomic numbers; coords: nuclei (n, 3, bohr)."""
-    coords = np.asarray(coords, dtype=float).reshape(-1, 3)
-    if atoms_Z is None or len(atoms_Z) != len(coords):
-        return list(range(len(coords)))
-    try:
-        from openbabel import openbabel as ob
-        mol = ob.OBMol()
-        for Z, xyz in zip(atoms_Z, coords * 0.52917721092):
-            atom = mol.NewAtom()
-            atom.SetAtomicNum(int(Z))
-            atom.SetVector(*map(float, xyz))
-        mol.ConnectTheDots()
-        mol.PerceiveBondOrders()
-        classes = ob.vectorUnsignedInt()
-        ob.OBGraphSym(mol).GetSymmetry(classes)
-        classes = [int(c) for c in classes]
-        return classes if len(classes) == len(coords) else list(range(len(coords)))
-    except Exception:
-        return list(range(len(coords)))
 
 
 def number_groups(extrema):

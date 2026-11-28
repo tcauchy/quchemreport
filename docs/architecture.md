@@ -23,7 +23,7 @@ YAML file
   │  config/            Config (pydantic): validated configuration
   ▼
 log files
-  │  parser_engine/     one LogData per calculation step (cclib + Open Babel)
+  │  parser_engine/     one LogData per calculation step (cclib, RDKit, Open Babel)
   ▼
 List[LogData]
   │  quality_check_engine/   conformity tests, choice of the reference log
@@ -58,8 +58,9 @@ Which computations are run depends on the outputs requested in the YAML file:
 - `split_logfile` splits a log file into its calculation steps (Gaussian `Link1` jobs, ORCA
   compound jobs) and writes each step to a temporary folder. A log file without a normal
   termination gives no step and stops the program with an explicit message.
-- `logfile_to_obj` reads one step with cclib, builds the molecule with Open Babel (formula,
-  connectivity, InChI, SMILES) and fills a `LogData` model, section by section
+- `logfile_to_obj` reads one step with cclib, perceives the bonds and writes the formula with
+  RDKit (`utility_services/molecule_graph.py`), gets InChI, SMILES and the monoisotopic mass
+  from Open Babel, and fills a `LogData` model, section by section
   (`molecule_section`, `parameters_section`, `results_section`, `metadata_section`).
 - `process_logfile_list` does this for every log file of the YAML file and gives the type
   written in the YAML file to every step of the file.

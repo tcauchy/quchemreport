@@ -21,12 +21,16 @@ FORMER_VIEW = np.array([0.0, np.sin(np.radians(10)), np.cos(np.radians(10))])
 
 
 def load(name):
-    """Atomic numbers, coordinates (A) and bonds (Open Babel, as scanlog) of geometries/<name>.xyz."""
-    from openbabel import pybel
-    pybel.ob.obErrorLog.SetOutputLevel(0)
-    mol = next(pybel.readfile("xyz", os.path.join(DATA, "geometries", name + ".xyz")))
-    pairs = [(b.GetBeginAtomIdx() - 1, b.GetEndAtomIdx() - 1) for b in pybel.ob.OBMolBondIter(mol.OBMol)]
-    return [a.atomicnum for a in mol.atoms], np.array([a.coords for a in mol.atoms]), pairs
+    """Atomic numbers, coordinates (A) and bonds (as scanlog) of geometries/<name>.xyz."""
+    from rdkit import Chem
+    from quchemreport.utility_services.molecule_graph import bond_pairs
+    with open(os.path.join(DATA, "geometries", name + ".xyz")) as fd:
+        lines = fd.read().splitlines()
+    atoms = [line.split() for line in lines[2:2 + int(lines[0])]]
+    table = Chem.GetPeriodicTable()
+    Z = [table.GetAtomicNumber(a[0]) for a in atoms]
+    xyz = np.array([[float(v) for v in a[1:4]] for a in atoms])
+    return Z, xyz, bond_pairs(Z, xyz)
 
 
 def model_geometry(path, solver="gaussian"):

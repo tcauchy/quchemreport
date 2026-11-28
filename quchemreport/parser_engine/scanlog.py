@@ -2,9 +2,9 @@
 
 A log file may contain several calculations (Gaussian Link1 jobs, ORCA compound jobs): it is
 first split into steps, written to a temporary folder, and each completed step is read on its
-own. A step is read with cclib (all the results) and Open Babel (molecule: formula,
-connectivity, InChI, SMILES), then copied, section by section, into a LogData model
-(utility_services.log_data). Values that cclib does not give for a log are left to None.
+own. A step is read with cclib (all the results), RDKit (bonds and formula, see
+utility_services.molecule_graph) and Open Babel (InChI, SMILES, monoisotopic mass), then
+copied, section by section, into a LogData model (utility_services.log_data). Values that cclib does not give for a log are left to None.
 
 Gaussian and ORCA are supported; GAMESS and NWChem are accepted without splitting and untested.
 A few values are read directly in the log, because cclib does not give them: the sum of
@@ -21,11 +21,11 @@ import hashlib
 import cclib
 import openbabel.pybel as pybel
 import numpy as np
-import openbabel as ob
 import sklearn.preprocessing
 
 from quchemreport.config.config import Config
 from quchemreport.utility_services.log_data import LogData
+from quchemreport.utility_services import molecule_graph
 from quchemreport.parser_engine.orca_soc import read_orca_soc
 
 # constants
@@ -763,49 +763,31 @@ def td_results_subsection(data_model: LogData, data_json, data, obdata):
 
 
 def molecule_section(data_model: LogData, data_json, data, obdata, verbose=False):
-    """Fill ``molecule``: chirality, valences, InChI, SMILES, monoisotopic mass and bonds (Open
-    Babel), then formula, numbers of atoms, charge, multiplicity, atomic numbers and the
-    starting geometry and energy (cclib).
+    """Fill ``molecule``: InChI, SMILES and monoisotopic mass (Open Babel), bonds and formula
+    (utility_services.molecule_graph, RDKit), then numbers of atoms, charge, multiplicity,
+    atomic numbers and the starting geometry and energy (cclib).
 
     Raises
     ------
     ScanlogException
         Open Babel could not read the molecule.
     """
-    if "isChiral" in dir(obdata.OBMol) and "GetValence" in obdata.atoms[0].OBAtom:
-        # openbabel 2
-        data_model.molecule.chirality = obdata.OBMol.IsChiral()
-        data_model.molecule.atoms_valence = [at.OBAtom.GetValence() for at in obdata.atoms]
-    else:
-        # openbabel 3
-        data_model.molecule.chirality = obdata.OBMol.HasChiralityPerceived()
-        # GetTotalValence() with implicit H, else GetExplicitValence()
-        data_model.molecule.atoms_valence = [at.OBAtom.GetTotalValence() for at in obdata.atoms]
     # Start OpenBabel (all are mandatory)
-    
     try:
         data_model.molecule.inchi = obdata.write("inchi").strip() # remove trailing \n
         data_model.molecule.smi = obdata.write("smi").split()[0]
-        data_model.molecule.can = obdata.write("can").split()[0]
         data_model.molecule.monoisotopic_mass = obdata.OBMol.GetExactMass() # in Dalton
-        
-        connectivity_atom_pairs = []
-        connectivity_bond_orders = []
-        for i, a1 in enumerate(obdata.atoms):
-            for j, a2 in enumerate(obdata.atoms):
-                b = a1.OBAtom.GetBond(a2.OBAtom)
-                if b is not None:
-                    connectivity_atom_pairs.append((i, j))
-                    connectivity_bond_orders.append(b.GetBondOrder())
-        data_model.molecule.connectivity.atom_pairs = connectivity_atom_pairs
-        data_model.molecule.connectivity.bond_orders = connectivity_bond_orders
     except:
         if verbose:
             traceback.print_exc()            
         raise ScanlogException("Reading mandatory data failed (Openbabel)")
     # End OpenBabel
-    
-    try_update_value(data_model, "molecule.formula", data_json, ['formula'])
+
+    # Bonds of the last geometry (the one drawn), and the formula from the atoms themselves:
+    # until 28/11/2026 the formula came from cclib, which computes it with Open Babel when Open
+    # Babel is installed (and gives none otherwise).
+    data_model.molecule.connectivity.atom_pairs = molecule_graph.bond_pairs(data.atomnos, data.atomcoords[-1])
+    data_model.molecule.formula = molecule_graph.formula(data.atomnos, getattr(data, "charge", 0))
     # CRITICAL TODO: formula versus inchi formula
     try_update_value(data_model, "molecule.nb_atoms", data_json, ['properties', 'number of atoms'])
     try_update_value(data_model, "molecule.nb_heavy_atoms", data_json, ['atoms', 'elements', 'heavy atom count'])

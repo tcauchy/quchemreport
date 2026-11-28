@@ -154,7 +154,8 @@ def test_equivalent_extrema_share_the_prominence_of_their_group():
 
 def test_symmetry_classes_and_group_numbers():
     """Water: the two H atoms in the same class; numbering: members of a group share a number."""
-    from quchemreport.data_enrichment.mep_surface import symmetry_classes, number_groups
+    from quchemreport.data_enrichment.mep_surface import number_groups
+    from quchemreport.utility_services.molecule_graph import symmetry_classes
     water = np.array([[0, 0, 0.2217], [0, 1.4309, -0.8867], [0, -1.4309, -0.8867]]) / 0.52917721092
     classes = symmetry_classes([8, 1, 1], water)
     assert classes[1] == classes[2] != classes[0]
