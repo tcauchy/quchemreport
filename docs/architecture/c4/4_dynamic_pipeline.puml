@@ -1,0 +1,31 @@
+@startuml 4_dynamic_pipeline
+!include <C4/C4_Dynamic>
+!include common.puml
+$common_tags()
+
+title QuChemReport — Dynamic view: building one report ($MODEL_DATE)
+
+' The stages run one after the other in engine.run; each one can stop the program with a
+' message, and nothing is computed after a stop.
+
+Person(user, $USER_NAME, "")
+Container_Boundary(app, "Report application") {
+  Component(cfg, "config", "pydantic", "Stops if the YAML file is invalid or a log file is missing.")
+  Component(parser, "parser_engine", "scanlog", "Stops if no log file has a normal termination.")
+  Component(qc, "quality_check_engine", "conformity", "Stops if the logs are not one molecule at one level of theory, or if there is not exactly one reference.")
+  Component(enr, "data_enrichment", "compute", "Skips (with a message) what the data do not allow: no MO coefficients, ECP without core data...")
+  Component(vis, "visualization_engine", "generate_visualization", "Pictures and plots.")
+  Component(rep, "report_generator", "generate_report", "LaTeX + pdflatex.")
+}
+Container(out, "Report folder", "files", $OUT_DESC, $tags="files")
+
+Rel(user, cfg, "python cli.py -c report.yaml")
+Rel(cfg, parser, "Config")
+Rel(parser, qc, "List[LogData]")
+Rel(qc, enr, "ValidatedData")
+Rel(enr, vis, "ComputedData")
+Rel(vis, rep, "pictures")
+Rel(rep, out, "PDF")
+
+SHOW_LEGEND()
+@enduml

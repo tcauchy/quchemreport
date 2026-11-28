@@ -1,0 +1,62 @@
+@startuml 2_containers
+!include <C4/C4_Container>
+!include common.puml
+$common_tags()
+
+title QuChemReport — 2. Containers ($MODEL_DATE)
+
+' QuChemReport is ONE process: the former diagrams split it into two "containers" (Data Analysis,
+' Data Enrichment and Visualization), which in C4 terms are components of the same container.
+' The real containers are that process and the files it reads and writes (plain files, no
+' database). The external software is grouped by theme, as in 1_system_context.
+
+Person(user, $USER_NAME, $USER_DESC)
+System_Ext(qcprog, $QCPROG_NAME, $QCPROG_DESC)
+
+System_Boundary(qcr, $QCR_NAME) {
+  Container(app, "Report application", "Python 3.12, cli.py", "Runs all the stages in one process, on a login node or in a Slurm job (under Xvfb for the 3D pictures).")
+  Container(yaml, "Configuration file", "YAML", $YAML_DESC, $tags="files")
+  Container(tmp, "Temporary folder", "files", $TMP_DESC, $tags="files")
+  Container(out, "Report folder", "files", $OUT_DESC, $tags="files")
+}
+Container_Ext(logs, "Log files", "Gaussian / ORCA text", $LOGS_DESC, $tags="ext_files")
+
+Boundary(th_read, $TH_READ) {
+  System_Ext(cclib, $CCLIB_NAME, $CCLIB_DESC)
+}
+Boundary(th_mol, $TH_MOL) {
+  System_Ext(rdkit, $RDKIT_NAME, $RDKIT_DESC)
+  System_Ext(obabel, $OBABEL_NAME, $OBABEL_DESC, $tags="replaced")
+}
+Boundary(th_grid, $TH_GRID) {
+  System_Ext(qmckl, $QMCKL_NAME, $QMCKL_DESC)
+}
+Boundary(th_pic, $TH_PIC) {
+  System_Ext(vtk, $VTK_NAME, $VTK_DESC)
+  System_Ext(povray, $POVRAY_NAME, $POVRAY_DESC)
+  System_Ext(mpl, $MPL_NAME, $MPL_DESC)
+}
+Boundary(th_doc, $TH_DOC) {
+  System_Ext(latex, $LATEX_NAME, $LATEX_DESC)
+}
+
+Rel(qcprog, logs, "Writes")
+Rel(user, yaml, "Writes")
+Rel(user, app, "Runs", "python cli.py -c report.yaml")
+Rel(app, yaml, "Reads")
+Rel(app, logs, "Reads")
+Rel(app, tmp, "Writes / reads the calculation steps")
+Rel(app, out, "Writes the report and pictures")
+Rel(user, out, "Reads")
+
+Rel(app, cclib, "Uses", "Python")
+Rel(app, rdkit, "Uses", "Python")
+Rel(app, obabel, "Uses today", "Python bindings")
+Rel(app, qmckl, "Uses", "Python bindings")
+Rel(app, vtk, "Uses", "Python")
+Rel(app, mpl, "Uses", "Python")
+Rel(vtk, povray, "Scene exported to", "subprocess")
+Rel(app, latex, "Uses / runs", "pylatex, pdflatex")
+
+SHOW_LEGEND()
+@enduml

@@ -4,6 +4,10 @@ This page is for the people who maintain QuChemReport. It describes how a report
 the data that flow between the stages, and the conventions of the code. The user
 documentation is in the other pages of this folder.
 
+The C4 diagrams (context, containers, components as they are and as they should become) are in
+[architecture/c4](architecture/c4/README.md); the rules for changing the code are in
+[CONTRIBUTING.md](../CONTRIBUTING.md).
+
 ## Overview
 
 A report is built from a YAML configuration file (see `example.yaml`) listing log files of

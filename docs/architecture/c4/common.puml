@@ -1,0 +1,87 @@
+' Shared definitions of the QuChemReport C4 model.
+'
+' Every element is described ONCE here and used by all the diagrams, so the diagrams cannot
+' drift apart (the former PDF diagrams described the user in three different ways).
+' Rendering: see README.md in this folder.
+
+' Graphviz is not installed on the cluster: smetana is the Java layout engine shipped with
+' PlantUML, so the diagrams render with nothing but Java.
+!pragma layout smetana
+
+' Updated when the model changes (yyyy-mm-dd), printed in every diagram title.
+!$MODEL_DATE = "2026-11-28"
+
+' --- People --------------------------------------------------------------------------------
+!$USER_NAME = "Chemist"
+!$USER_DESC = "Runs quantum chemistry calculations on a molecule and wants them checked, analysed and formatted as a report (also uses the pictures in talks and papers)."
+
+' --- The system ----------------------------------------------------------------------------
+!$QCR_NAME = "QuChemReport"
+!$QCR_DESC = "Checks that a set of Gaussian/ORCA log files describe one molecule at one level of theory, computes derived properties (grids, spectra, indices) and writes a PDF report with tables and pictures."
+
+' --- External software, grouped by theme ------------------------------------------------
+' Five themes, so that the diagrams stay readable and show what each library is for.
+' orbkit was removed from the diagrams on 2026-11-28 (maintainer's decision: QMCkl is faster,
+' reliable and maintained); its code is removed by a separate change.
+!$QCPROG_NAME = "Gaussian 09 / ORCA 6"
+!$QCPROG_DESC = "Quantum chemistry programs run by the user; their log files are the input."
+
+!$TH_READ = "Reading the logs"
+!$CCLIB_NAME = "cclib"
+!$CCLIB_DESC = "Parses the log files into common attributes (development version, with QuChemReport fixes installed until they are released upstream)."
+
+!$TH_MOL = "Identity of the molecule"
+!$RDKIT_NAME = "RDKit"
+!$RDKIT_DESC = "Bonds from the geometry, InChI, SMILES, monoisotopic mass, equivalent atoms (grouping of the MEP extrema)."
+!$OBABEL_NAME = "Open Babel"
+!$OBABEL_DESC = "Used today for the same data; to be replaced by RDKit (decided 2026-11-28: GPL-2-only licence, no release since 2020)."
+
+!$TH_GRID = "Wavefunction on grids"
+!$QMCKL_NAME = "QMCkl"
+!$QMCKL_DESC = "Evaluates atomic and molecular orbitals and densities on grids."
+
+!$TH_PIC = "Pictures"
+!$VTK_NAME = "Mayavi / VTK"
+!$VTK_DESC = "Iso-surfaces, mapped surfaces and off-screen 3D rendering (needs an X server: Xvfb on the nodes)."
+!$POVRAY_NAME = "POV-Ray"
+!$POVRAY_DESC = "Optional ray-traced rendering of the VTK scenes (output.renderer: povray)."
+!$MPL_NAME = "matplotlib"
+!$MPL_DESC = "Spectra and energy diagrams."
+
+!$TH_DOC = "Report document"
+!$LATEX_NAME = "pylatex + pdflatex"
+!$LATEX_DESC = "Builds the LaTeX document and compiles it to PDF (output format under discussion: an editable format is requested)."
+
+' --- Files read and written (not databases) ------------------------------------------------
+!$YAML_DESC = "Log files with their types (opt, freq, td, sp...), the reference log, the outputs wanted."
+!$LOGS_DESC = "Text outputs of the calculations; a file may hold several steps (Link1, compound jobs)."
+!$TMP_DESC = "One file per calculation step, written by the parser."
+!$OUT_DESC = "PDF report, LaTeX source, PNG pictures, spectra as text files."
+
+' --- Stage components ----------------------------------------------------------------------
+!$CFG_DESC = "Validates the YAML file into a Config object (pydantic)."
+!$ENG_DESC = "Runs the stages in order and passes their results on (engine.run)."
+!$PARSER_DESC = "Splits log files into steps; one LogData per step (cclib + Open Babel)."
+!$QC_DESC = "Conformity tests of the set of logs; choice of the reference log and of the model used for the grids."
+!$ENR_DESC = "Grids (MO, MEP, Fukui, EDD, NTO, transition densities), spectra, reactivity indices, selection of the excited states."
+!$VIS_DESC = "3D pictures, spectra plots, spectra as text."
+!$REP_DESC = "LaTeX document, section by section; compilation to PDF."
+!$UTIL_DESC = "Shared kernel: data models passed between stages (LogData, ValidatedData, ComputedData), units, names."
+
+' --- Data passed between stages (labels of the arrows) -------------------------------------
+!$T_CONFIG = "Config"
+!$T_LOGDATA = "List[LogData]"
+!$T_VALIDATED = "ValidatedData"
+!$T_COMPUTED = "ComputedData"
+!$T_PICTURES = "picture files"
+
+' --- Tags ----------------------------------------------------------------------------------
+!procedure $common_tags()
+AddElementTag("replaced", $bgColor="#DADADA", $fontColor="#333333", $borderColor="#6E6E6E", $borderStyle=DashedLine(), $legendText="to be replaced")
+' Files are drawn as plain boxes of their own colour: the C4 "database" cylinder suggested a
+' database (SQL), and QuChemReport has none.
+AddElementTag("files", $bgColor="#5B7F6E", $borderColor="#3F5F50", $legendText="files")
+AddElementTag("ext_files", $bgColor="#8FA89B", $borderColor="#6E8A7C", $legendText="files outside QuChemReport")
+AddRelTag("violation", $textColor="#B00020", $lineColor="#B00020", $lineStyle=DashedLine(), $legendText="dependency against the layer order")
+AddRelTag("misplaced", $textColor="#B06000", $lineColor="#B06000", $lineStyle=DottedLine(), $legendText="computation done outside data_enrichment")
+!endprocedure

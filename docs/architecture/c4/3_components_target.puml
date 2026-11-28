@@ -1,0 +1,68 @@
+@startuml 3_components_target
+!include <C4/C4_Component>
+!include common.puml
+$common_tags()
+
+title QuChemReport — 3. Components, TARGET ($MODEL_DATE, proposal awaiting approval)
+
+' Layer rule: utility_services depends on nothing of QuChemReport; every stage depends only on
+' utility_services and on the stages before it (config < parser < quality_check <
+' data_enrichment < visualization < report). To be enforced by an import test (review plan,
+' step 4). The refactoring plan is the path from 3_components_current to this diagram.
+
+Container(yaml, "Configuration file", "YAML", $YAML_DESC, $tags="files")
+Container_Ext(logs, "Log files", "Gaussian / ORCA text", $LOGS_DESC, $tags="ext_files")
+Container(out, "Report folder", "files", $OUT_DESC, $tags="files")
+
+Container_Boundary(app, "Report application") {
+  Component(eng, "execution_engine", "engine.run", "Runs the stages in order; builds one Settings object from the Config and passes it explicitly (no module globals).")
+  Component(cfg, "config", "pydantic", "Validates the YAML file; unknown keys are refused.")
+  Component(parser, "parser_engine", "scanlog", "One LogData per step. Reads the logs through cclib only (direct reads moved to cclib upstream).")
+  Component(qc, "quality_check_engine", "conformity", $QC_DESC)
+  Component(enr, "data_enrichment", "split by topic: orbitals, mep, reactivity, chiroptics, excited_states...", "Every number of the report is computed here, NTO grids and chiroptical quantities included.")
+  Component(vis, "visualization_engine", "scene, camera, isosurfaces, plots", "Draws only; returns a manifest of the pictures written.")
+  Component(rep, "report_generator", "document + one module per section", "Formats only; reads values from ComputedData and picture names from the manifest.")
+  Component(util, "utility_services", "data models, units, geometry (same_geometry, Kabsch), naming, spectrum units, errors", "Shared kernel, no dependency on the stages.")
+}
+
+Rel(cfg, yaml, "Reads")
+Rel(parser, logs, "Reads")
+Rel(vis, out, "Writes pictures")
+Rel(rep, out, "Writes PDF")
+
+Rel(eng, cfg, "1. gets", $T_CONFIG)
+Rel(eng, parser, "2. Settings ->", $T_LOGDATA)
+Rel(eng, qc, "3. ->", $T_VALIDATED)
+Rel(eng, enr, "4. ->", $T_COMPUTED)
+Rel(eng, vis, "5. ComputedData ->", "picture manifest")
+Rel(eng, rep, "6. ComputedData + manifest ->", "PDF")
+
+' Each theme of external software is used by one stage only (RDKit by two: bonds and
+' identifiers when a log is read, equivalent atoms when the MEP extrema are grouped).
+' One box per theme here; the libraries are detailed in 1_system_context.
+System_Ext(th_read, $TH_READ, "cclib")
+System_Ext(th_mol, $TH_MOL, "RDKit")
+System_Ext(th_grid, $TH_GRID, "QMCkl")
+System_Ext(th_pic, $TH_PIC, "Mayavi / VTK, POV-Ray, matplotlib")
+System_Ext(th_doc, $TH_DOC, "Engine and output formats under discussion (PDF, editable format)")
+
+Rel_D(parser, th_read, "parses with")
+Rel_D(parser, th_mol, "bonds, InChI, SMILES, mass")
+Rel_D(enr, th_mol, "equivalent atoms")
+Rel_D(enr, th_grid, "grids with")
+Rel_D(vis, th_pic, "draws with")
+Rel_D(rep, th_doc, "writes with")
+Lay_R(th_read, th_mol)
+Lay_R(th_mol, th_grid)
+Lay_R(th_grid, th_pic)
+Lay_R(th_pic, th_doc)
+
+Rel(cfg, util, "uses")
+Rel(parser, util, "uses")
+Rel(qc, util, "uses")
+Rel(enr, util, "uses")
+Rel(vis, util, "uses")
+Rel(rep, util, "uses")
+
+SHOW_LEGEND()
+@enduml

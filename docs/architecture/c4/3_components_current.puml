@@ -1,0 +1,52 @@
+@startuml 3_components_current
+!include <C4/C4_Component>
+!include common.puml
+$common_tags()
+
+title QuChemReport — 3. Components, CURRENT state of the code ($MODEL_DATE)
+
+' What the code does today (commit 08f9220), including what should change. Red dashed arrows:
+' imports against the layer order. Orange dotted arrows: computations made outside
+' data_enrichment. Source: imports listed on 2026-11-28 (full review, journal sections 2.1-2.2).
+
+Container(yaml, "Configuration file", "YAML", $YAML_DESC, $tags="files")
+Container_Ext(logs, "Log files", "Gaussian / ORCA text", $LOGS_DESC, $tags="ext_files")
+Container(out, "Report folder", "files", $OUT_DESC, $tags="files")
+
+Container_Boundary(app, "Report application") {
+  Component(eng, "execution_engine", "engine.run", $ENG_DESC)
+  Component(cfg, "config", "pydantic", $CFG_DESC)
+  Component(parser, "parser_engine", "scanlog, orca_soc", $PARSER_DESC)
+  Component(qc, "quality_check_engine", "conformity", $QC_DESC)
+  Component(enr, "data_enrichment", "compute, calc_orb, qmckl_backend, mep_surface, state_selection...", $ENR_DESC)
+  Component(vis, "visualization_engine", "generate_visualization, visu_mayavi, camera, povray, visu_plots", $VIS_DESC)
+  Component(rep, "report_generator", "generate_report (3238 lines)", $REP_DESC)
+  Component(util, "utility_services", "log_data, validated_data, computed_data, units, naming, parameters", $UTIL_DESC)
+}
+
+Rel(cfg, yaml, "Reads")
+Rel(parser, logs, "Reads")
+Rel(vis, out, "Writes pictures")
+Rel(rep, out, "Writes PDF")
+
+Rel(eng, cfg, "1. gets", $T_CONFIG)
+Rel(eng, parser, "2. Config ->", $T_LOGDATA)
+Rel(eng, qc, "3. LogData ->", $T_VALIDATED)
+Rel(eng, enr, "4. LogData + ValidatedData ->", $T_COMPUTED)
+Rel(eng, vis, "5. ComputedData ->", $T_PICTURES)
+Rel(eng, rep, "6. ComputedData + pictures ->", "PDF")
+Rel(eng, vis, "configures by module globals (size, camera, renderer...)")
+
+Rel(parser, util, "builds LogData")
+Rel(enr, util, "builds ComputedData")
+
+Rel(cfg, vis, "visu_plots.unit_name", $tags="violation")
+Rel(qc, enr, "calc_orb._use_qmckl", $tags="violation")
+Rel(enr, vis, "camera (rings, views)", $tags="violation")
+Rel(enr, qc, "same_geometry")
+Rel(vis, enr, "computes NTO grids (calc_orb.nto_pair); is_chiral", $tags="misplaced")
+Rel(rep, enr, "computes R(velocity), g, chirality", $tags="misplaced")
+Rel(rep, vis, "picture names rebuilt (~25 places)")
+
+SHOW_LEGEND()
+@enduml

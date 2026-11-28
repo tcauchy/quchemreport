@@ -1,0 +1,45 @@
+@startuml 1_system_context
+!include <C4/C4_Context>
+!include common.puml
+$common_tags()
+
+title QuChemReport — 1. System context ($MODEL_DATE)
+
+' The external software is grouped by theme: one arrow per theme says what it is used for.
+
+Person(user, $USER_NAME, $USER_DESC)
+System(qcr, $QCR_NAME, $QCR_DESC)
+System_Ext(qcprog, $QCPROG_NAME, $QCPROG_DESC)
+
+Boundary(th_read, $TH_READ) {
+  System_Ext(cclib, $CCLIB_NAME, $CCLIB_DESC)
+}
+Boundary(th_mol, $TH_MOL) {
+  System_Ext(rdkit, $RDKIT_NAME, $RDKIT_DESC)
+  System_Ext(obabel, $OBABEL_NAME, $OBABEL_DESC, $tags="replaced")
+}
+Boundary(th_grid, $TH_GRID) {
+  System_Ext(qmckl, $QMCKL_NAME, $QMCKL_DESC)
+}
+Boundary(th_pic, $TH_PIC) {
+  System_Ext(vtk, $VTK_NAME, $VTK_DESC)
+  System_Ext(povray, $POVRAY_NAME, $POVRAY_DESC)
+  System_Ext(mpl, $MPL_NAME, $MPL_DESC)
+}
+Boundary(th_doc, $TH_DOC) {
+  System_Ext(latex, $LATEX_NAME, $LATEX_DESC)
+}
+
+Rel(user, qcprog, "Runs calculations with")
+Rel(user, qcr, "Gives a YAML file listing the log files; gets a PDF report and pictures from")
+Rel(qcr, cclib, "Parses the log files with")
+Rel(qcr, rdkit, "Perceives bonds, identifiers and equivalent atoms with")
+Rel(qcr, obabel, "Does the same today with")
+Rel(qcr, qmckl, "Evaluates orbitals and densities on grids with")
+Rel(qcr, vtk, "Draws the 3D pictures with")
+Rel(qcr, mpl, "Plots spectra with")
+Rel(vtk, povray, "Scenes optionally ray-traced by")
+Rel(qcr, latex, "Writes and compiles the report with")
+
+SHOW_LEGEND()
+@enduml
