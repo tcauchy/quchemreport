@@ -28,6 +28,7 @@ The report is written in `<output_path>/<molecule_designated_name>/`.
 
 See [docs/](docs/README.md):
 
+- [Capabilities and limits](docs/capabilities.md), and the [development plan](docs/roadmap.md);
 - [Preparing the calculations](docs/calculations.md) (Gaussian and ORCA keywords, example
   inputs in `examples/acetone`);
 - [Running QuChemReport](docs/running.md);
