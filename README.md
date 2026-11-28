@@ -38,8 +38,8 @@ See [docs/](docs/README.md):
 
 ## Requirements
 
-Python 3.12 with NumPy, SciPy, pydantic, PyYAML, cclib, Open Babel with its Python bindings,
-QMCkl, Mayavi/VTK, matplotlib, pylatex, and a LaTeX distribution (`pdflatex`). orbkit is only
+Python 3.12 with NumPy, SciPy, pydantic, PyYAML, cclib, RDKit, QMCkl, Mayavi/VTK, matplotlib,
+pylatex, and a LaTeX distribution (`pdflatex`). orbkit is only
 needed to compare with the former grid engine.
 
 cclib: use its development version (GitHub master); the release 1.8.1 cannot read ORCA 6 outputs.
@@ -56,10 +56,6 @@ made (tested with cclib master on the whole test suite), with these losses:
 | ORCA negative RPA weights | ORCA `tda false` with `tprint` below the default: cclib stops |
 
 The installation of the laboratory (`/applis/cclib`) has all of them.
-
-cclib master since 25/04/2026 cannot write the XYZ block of a Gaussian optimization (one comment per
-job, read as one per geometry): QuChemReport builds that block itself until the fix proposed to cclib
-is merged (`parser_engine/scanlog.py`, `last_geometry_xyz`).
 
 ## History
 

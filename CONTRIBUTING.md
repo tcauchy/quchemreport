@@ -187,7 +187,7 @@ transparency...) is a `[calibration]` change.
 ## 5. Environment
 
 Results depend on the libraries as much as on the code: cclib (a development version with
-fixes not yet released), QMCkl, VTK/Mayavi, POV-Ray, Open Babel, LaTeX, NumPy and its linear
+fixes not yet released), QMCkl, VTK/Mayavi, POV-Ray, RDKit, LaTeX, NumPy and its linear
 algebra library.
 
 - Reference reports record the library versions (and cclib's commit), `resources.nproc` and

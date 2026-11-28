@@ -7,7 +7,9 @@ pictures are left out; with `verbosity: text` there are no orbital, MEP or densi
 ## Sections
 
 1. **Molecule**: picture with the atom numbers, identification (formula, mass, InChI,
-   SMILES).
+   SMILES). InChI and SMILES are deduced from the geometry and the charge of the reference log
+   (RDKit); when no bond orders fit (radicals, many ions, metals) they are left out and the
+   table says why. The monoisotopic mass of an ion counts its missing or extra electrons.
 2. **Log files**: one table of the calculations grouped by kind, in the order of a study
    (ground-state optimization, frequencies, vertical excited states, single points,
    excited-state optimizations), with the charge and multiplicity of each log, its geometry

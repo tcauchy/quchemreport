@@ -27,9 +27,8 @@ Conventions (2026-11-28):
   wavefunction on grids, pictures, report document), one arrow per use.
 - orbkit is no longer drawn: QMCkl replaces it (faster, reliable, maintained); the remaining
   orbkit code is removed by a separate change.
-- Open Babel is drawn as "to be replaced": RDKit takes over its work (bonds, InChI, SMILES,
-  mass, equivalent atoms). Remove it from the diagrams in the commit that removes it from the
-  code.
+- Open Babel is no longer drawn: RDKit replaced it on 2026-11-28 (bonds, formula, InChI,
+  SMILES, mass, equivalent atoms).
 - Files are drawn as plain boxes, not as the C4 "database" cylinder: QuChemReport has no
   database.
 

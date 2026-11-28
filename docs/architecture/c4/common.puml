@@ -33,8 +33,6 @@
 !$TH_MOL = "Identity of the molecule"
 !$RDKIT_NAME = "RDKit"
 !$RDKIT_DESC = "Bonds from the geometry, InChI, SMILES, monoisotopic mass, equivalent atoms (grouping of the MEP extrema)."
-!$OBABEL_NAME = "Open Babel"
-!$OBABEL_DESC = "Used today for the same data; to be replaced by RDKit (decided 2026-11-28: GPL-2-only licence, no release since 2020)."
 
 !$TH_GRID = "Wavefunction on grids"
 !$QMCKL_NAME = "QMCkl"
@@ -61,7 +59,7 @@
 ' --- Stage components ----------------------------------------------------------------------
 !$CFG_DESC = "Validates the YAML file into a Config object (pydantic)."
 !$ENG_DESC = "Runs the stages in order and passes their results on (engine.run)."
-!$PARSER_DESC = "Splits log files into steps; one LogData per step (cclib + Open Babel)."
+!$PARSER_DESC = "Splits log files into steps; one LogData per step (cclib, bonds and formula by RDKit)."
 !$QC_DESC = "Conformity tests of the set of logs; choice of the reference log and of the model used for the grids."
 !$ENR_DESC = "Grids (MO, MEP, Fukui, EDD, NTO, transition densities), spectra, reactivity indices, selection of the excited states."
 !$VIS_DESC = "3D pictures, spectra plots, spectra as text."
@@ -77,7 +75,6 @@
 
 ' --- Tags ----------------------------------------------------------------------------------
 !procedure $common_tags()
-AddElementTag("replaced", $bgColor="#DADADA", $fontColor="#333333", $borderColor="#6E6E6E", $borderStyle=DashedLine(), $legendText="to be replaced")
 ' Files are drawn as plain boxes of their own colour: the C4 "database" cylinder suggested a
 ' database (SQL), and QuChemReport has none.
 AddElementTag("files", $bgColor="#5B7F6E", $borderColor="#3F5F50", $legendText="files")

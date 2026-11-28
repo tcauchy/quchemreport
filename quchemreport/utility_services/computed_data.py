@@ -44,6 +44,8 @@ class Molecule:
     monoisotopic_mass: Optional[float]
     inchi: Optional[str]
     smi: Optional[str]
+    # Why the InChI and the SMILES are missing (molecule_graph.identifiers), else None
+    identifiers_note: Optional[str]
     connectivity: MoleculeConnectivity
     formula: Optional[str]
 

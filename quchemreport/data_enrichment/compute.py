@@ -36,6 +36,7 @@ from quchemreport.data_enrichment.nto import build_nto_pairs, X_NORM_COMPLETE_TH
 from quchemreport.data_enrichment.compute_flags import ComputeFlags, resolve_compute_flags
 from quchemreport.utility_services.computed_data import ComputedData, FukuiData, MODiagramsComputedData, init_computed_data
 from quchemreport.utility_services.log_data import LogData
+from quchemreport.utility_services import molecule_graph
 from quchemreport.utility_services.validated_data import ValidatedData
 from quchemreport.utility_services.parameters import FWHM, obk_step
 from quchemreport.data_enrichment import state_selection
@@ -209,9 +210,14 @@ def extract_simple_data(list_data_models: List[LogData], ref_data:LogData, compu
     """
     
     # Extract simple data from the reference logfile
-    computed_data.molecule.monoisotopic_mass = ref_data.molecule.monoisotopic_mass
-    computed_data.molecule.inchi = ref_data.molecule.inchi
-    computed_data.molecule.smi = ref_data.molecule.smi
+    # Identity of the molecule, once, from the last geometry and the charge of the reference
+    # (until 28/11/2026 Open Babel gave it for every step, without the charge of an ion)
+    ref_coords = np.asarray(ref_data.results.geometry.elements_3D_coords, dtype=float).reshape(-1, 3)
+    ids = molecule_graph.identifiers(ref_data.molecule.atoms_Z, ref_coords, ref_data.molecule.charge)
+    computed_data.molecule.monoisotopic_mass = ids.monoisotopic_mass
+    computed_data.molecule.inchi = ids.inchi
+    computed_data.molecule.smi = ids.smiles
+    computed_data.molecule.identifiers_note = ids.note
     computed_data.molecule.formula = ref_data.molecule.formula
     computed_data.comp_details.general.package = ref_data.comp_details.general.package
     computed_data.results.wavefunction.Mulliken_partial_charges = ref_data.results.wavefunction.Mulliken_partial_charges

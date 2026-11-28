@@ -26,7 +26,6 @@ Boundary(th_read, $TH_READ) {
 }
 Boundary(th_mol, $TH_MOL) {
   System_Ext(rdkit, $RDKIT_NAME, $RDKIT_DESC)
-  System_Ext(obabel, $OBABEL_NAME, $OBABEL_DESC, $tags="replaced")
 }
 Boundary(th_grid, $TH_GRID) {
   System_Ext(qmckl, $QMCKL_NAME, $QMCKL_DESC)
@@ -51,7 +50,6 @@ Rel(user, out, "Reads")
 
 Rel(app, cclib, "Uses", "Python")
 Rel(app, rdkit, "Uses", "Python")
-Rel(app, obabel, "Uses today", "Python bindings")
 Rel(app, qmckl, "Uses", "Python bindings")
 Rel(app, vtk, "Uses", "Python")
 Rel(app, mpl, "Uses", "Python")

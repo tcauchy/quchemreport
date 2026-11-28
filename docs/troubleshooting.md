@@ -17,7 +17,7 @@ is missing`** (ORCA: `Timings for individual modules:`). The calculation did not
 the end of the log. An interrupted last step of a multi-step log only gives the warning
 `the last step of ... has no ... (interrupted job?); it is ignored`.
 
-**`Reading of '...' (step k/n) failed in cclib or Open Babel`** The log could not be read. Check
+**`Reading of '...' (step k/n) failed in cclib`** The log could not be read. Check
 that it is a complete output of the program declared in `common_solver`.
 
 **`Too many different formulas`** The log files are not all of the same molecule.

@@ -2,9 +2,9 @@
 
 A log file may contain several calculations (Gaussian Link1 jobs, ORCA compound jobs): it is
 first split into steps, written to a temporary folder, and each completed step is read on its
-own. A step is read with cclib (all the results), RDKit (bonds and formula, see
-utility_services.molecule_graph) and Open Babel (InChI, SMILES, monoisotopic mass), then
-copied, section by section, into a LogData model (utility_services.log_data). Values that cclib does not give for a log are left to None.
+own. A step is read with cclib (all the results) and RDKit (bonds and formula, see
+utility_services.molecule_graph), then copied, section by section, into a LogData model
+(utility_services.log_data). Values that cclib does not give for a log are left to None.
 
 Gaussian and ORCA are supported; GAMESS and NWChem are accepted without splitting and untested.
 A few values are read directly in the log, because cclib does not give them: the sum of
@@ -19,7 +19,6 @@ import json
 import pickle
 import hashlib
 import cclib
-import openbabel.pybel as pybel
 import numpy as np
 import sklearn.preprocessing
 
@@ -372,7 +371,7 @@ def try_update_value(
 
 
 
-def general_param_subsection(data_model: LogData, data_json, data, obdata):
+def general_param_subsection(data_model: LogData, data_json, data):
     """Fill ``comp_details.general``: program and version, methods, functional and dispersion,
     basis set (pickled with its MD5 hash, to compare basis sets), atomic orbitals, closed or
     open shell, solvent, SCF targets and core electrons.
@@ -487,18 +486,18 @@ def solvent_description(metadata):
     return f"{name or 'unnamed solvent'} ({details})", model
 
 
-def geometry_param_subsection(data_model: LogData, data_json, data, obdata):
+def geometry_param_subsection(data_model: LogData, data_json, data):
     """Fill ``comp_details.geometry`` (convergence targets of the optimization)."""
     try_update_value(data_model,"comp_details.geometry.geometric_targets", data_json, ['optimization', 'geometric targets'])
 
 
-def freq_param_subsection(data_model: LogData, data_json, data, obdata):
+def freq_param_subsection(data_model: LogData, data_json, data):
     """Fill ``comp_details.freq`` (temperature, anharmonicity)."""
     try_update_value(data_model, "comp_details.freq.temperature", data_json, ['properties', 'temperature'])
     try_update_value(data_model, "comp_details.freq.anharmonicity", data_json, ['vibrations', 'anharmonicity constants'])
 
 
-def td_param_subsection(data_model: LogData, data_json, data, obdata):
+def td_param_subsection(data_model: LogData, data_json, data):
     """Fill ``comp_details.excited_states`` (number of excited states)."""
     # Number of states from the cclib attribute etenergies: the JSON entry used before
     # ('transitions' / 'electronic transitions') gave 3 instead of 20 states for an ORCA TD
@@ -511,7 +510,7 @@ def td_param_subsection(data_model: LogData, data_json, data, obdata):
     # data_model.comp_details.excited_states.et_sym_constraints = 'N/A/'
 
 
-def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata):
+def wavefunction_results_subsection(data_model: LogData, data_json, data):
     """Fill ``results.wavefunction``: orbitals, total energy, charges, moments, SCF values.
 
     The MO energies, symmetries and coefficients are kept up to the first virtual orbital
@@ -600,7 +599,7 @@ def wavefunction_results_subsection(data_model: LogData, data_json, data, obdata
         pass
 
 
-def geom_results_subsection(data_model: LogData, data_json, data, obdata):
+def geom_results_subsection(data_model: LogData, data_json, data):
     """Fill ``results.geometry``: nuclear repulsion energy, optimization status, coordinates
     (Angstrom) and geometric convergence values.
     """
@@ -705,7 +704,7 @@ def _orca_functional(logfile, keywords=None):
     return f"{names[0]} ({definition})" if names else definition
 
 
-def freq_results_subsection(data_model: LogData, data_json, data, obdata):
+def freq_results_subsection(data_model: LogData, data_json, data):
     """Fill ``results.freq``: thermochemistry (entropy, enthalpy, free energy, zero-point
     correction), frequencies, IR and Raman intensities, symmetries, displacements,
     polarizabilities, anharmonicity.
@@ -738,7 +737,7 @@ def freq_results_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "results.freq.vibrational_anharms", data_json, ['vibrations', 'anharmonicity constants'])
     try_update_value(data_model, "results.freq.vibrational_raman", data_json, ['vibrations', 'intensities', 'raman'])
 
-def td_results_subsection(data_model: LogData, data_json, data, obdata):
+def td_results_subsection(data_model: LogData, data_json, data):
     """Fill ``results.excited_states``: energies, oscillator and rotatory strengths, symmetries,
     excitation amplitudes and transition dipoles of the excited states.
     """
@@ -762,27 +761,12 @@ def td_results_subsection(data_model: LogData, data_json, data, obdata):
     try_update_value(data_model, "results.excited_states.et_magdips", data_json, ['transitions', 'magnetic transition dipoles'])
 
 
-def molecule_section(data_model: LogData, data_json, data, obdata, verbose=False):
-    """Fill ``molecule``: InChI, SMILES and monoisotopic mass (Open Babel), bonds and formula
-    (utility_services.molecule_graph, RDKit), then numbers of atoms, charge, multiplicity,
-    atomic numbers and the starting geometry and energy (cclib).
-
-    Raises
-    ------
-    ScanlogException
-        Open Babel could not read the molecule.
+def molecule_section(data_model: LogData, data_json, data, verbose=False):
+    """Fill ``molecule``: bonds and formula (utility_services.molecule_graph, RDKit), then
+    numbers of atoms, charge, multiplicity, atomic numbers and the starting geometry and
+    energy (cclib). InChI, SMILES and mass are computed once for the reference log, in
+    data_enrichment.compute.
     """
-    # Start OpenBabel (all are mandatory)
-    try:
-        data_model.molecule.inchi = obdata.write("inchi").strip() # remove trailing \n
-        data_model.molecule.smi = obdata.write("smi").split()[0]
-        data_model.molecule.monoisotopic_mass = obdata.OBMol.GetExactMass() # in Dalton
-    except:
-        if verbose:
-            traceback.print_exc()            
-        raise ScanlogException("Reading mandatory data failed (Openbabel)")
-    # End OpenBabel
-
     # Bonds of the last geometry (the one drawn), and the formula from the atoms themselves:
     # until 28/11/2026 the formula came from cclib, which computes it with Open Babel when Open
     # Babel is installed (and gives none otherwise).
@@ -811,31 +795,31 @@ def molecule_section(data_model: LogData, data_json, data, obdata, verbose=False
     try_update_value(data_model, "molecule.starting_nuclear_repulsion", nuclear_repulsion_energy(data, 0))
 
 
-def parameters_section(data_model: LogData, data_json, data, obdata):
+def parameters_section(data_model: LogData, data_json, data):
     # subsection : General parameters
     """Fill the ``comp_details`` section (computational details)."""
-    general_param_subsection(data_model, data_json, data, obdata)
+    general_param_subsection(data_model, data_json, data)
     # subsection : Geometry 
-    geometry_param_subsection(data_model, data_json, data, obdata)
+    geometry_param_subsection(data_model, data_json, data)
     # subsection : Thermochemistry and normal modes
-    freq_param_subsection(data_model, data_json, data, obdata)
+    freq_param_subsection(data_model, data_json, data)
     # subsection :  Excited states
-    td_param_subsection(data_model, data_json, data, obdata)
+    td_param_subsection(data_model, data_json, data)
 
 
-def results_section(data_model: LogData, data_json, data, obdata):
+def results_section(data_model: LogData, data_json, data):
     # subsection : Wavefunction
     """Fill the ``results`` section."""
-    wavefunction_results_subsection(data_model, data_json, data, obdata)
+    wavefunction_results_subsection(data_model, data_json, data)
     # subsection : Geometry
-    geom_results_subsection(data_model, data_json, data, obdata)
+    geom_results_subsection(data_model, data_json, data)
     # subsection : Thermochemistry and normal modes
-    freq_results_subsection(data_model, data_json, data, obdata)
+    freq_results_subsection(data_model, data_json, data)
     # subsection : Excited states
-    td_results_subsection(data_model, data_json, data, obdata)
+    td_results_subsection(data_model, data_json, data)
 
 
-def metadata_section(logfile, data_model: LogData, data_json, data, obdata):
+def metadata_section(logfile, data_model: LogData, data_json, data):
     """Fill the ``metadata`` section: parser version, name of the step file, and whether the
     log has MO coefficients (``discretizable``).
     """
@@ -846,8 +830,8 @@ def metadata_section(logfile, data_model: LogData, data_json, data, obdata):
         data_model.metadata.discretizable = True
 
 
-def full_report(logfile, data_json, data, obdata, verbose=False):
-    """Build the LogData model of one step from its cclib and Open Babel data.
+def full_report(logfile, data_json, data, verbose=False):
+    """Build the LogData model of one step from its cclib data.
 
     Parameters
     ----------
@@ -856,7 +840,6 @@ def full_report(logfile, data_json, data, obdata, verbose=False):
     data_json : dict
         cclib result as JSON (cclib writejson).
     data : cclib ccData
-    obdata : pybel.Molecule
     verbose : bool, optional
 
     Returns
@@ -866,44 +849,22 @@ def full_report(logfile, data_json, data, obdata, verbose=False):
     data_model = LogData()
     
     # section : Molecule
-    molecule_section(data_model, data_json, data, obdata, verbose=verbose)
+    molecule_section(data_model, data_json, data, verbose=verbose)
     # section : Computational details
-    parameters_section(data_model, data_json, data, obdata)
+    parameters_section(data_model, data_json, data)
     # section : Results
-    results_section(data_model, data_json, data, obdata)
+    results_section(data_model, data_json, data)
     # section : Metadata
-    metadata_section(logfile, data_model, data_json, data, obdata)
+    metadata_section(logfile, data_model, data_json, data)
     
     return data_model
-
-
-def last_geometry_xyz(data):
-    """XYZ block of the last geometry read by cclib (atomnos, atomcoords in Angstrom), in the
-    format of cclib's XYZ writer, for Open Babel.
-
-    Temporary workaround (27/11/2026, Thomas Cauchy), to be removed once cclib is fixed: then
-    call data.writexyz() again, as before. Why: the XYZ writer of cclib takes the comment of a
-    geometry as metadata["comments"][index], but the Gaussian parser stores one comment per job
-    (its title section), not one per geometry. It worked by chance for the last geometry while
-    its index was -1; since cclib commit 58814731 (25/04/2026, "XYZ: remove -1 as sentinel") the
-    index is n_geometries - 1 and every Gaussian optimization raises IndexError: no report could
-    be made with cclib master. The cclib of /applis (master of 15/11/2025, 53594d0e) is not
-    affected. Fix proposed to cclib: branch xyz-writer-comments (commit c374f344), see README.
-    The block is built here from the two attributes every cclib version gives, in the format of
-    the cclib writer (same atom lines; the title line is not used by Open Babel)."""
-    table = cclib.parser.utils.PeriodicTable()
-    coords = data.atomcoords[-1]
-    lines = [str(len(data.atomnos)), "Last geometry"]
-    lines += ["{:3s} {:15.10f} {:15.10f} {:15.10f}".format(table.element[int(z)], *xyz)
-              for z, xyz in zip(data.atomnos, coords)]
-    return "\n".join(lines) + "\n"
 
 
 def logfile_to_obj(logfile, verbose=False):
     # reading with cclib
     """Read one step file into a LogData model.
 
-    cclib reads the log; Open Babel reads the last geometry (from cclib's XYZ). The sum of
+    cclib reads the log; RDKit perceives the bonds of the last geometry. The sum of
     electronic and thermal energies and, for ORCA, the functional are read in the log.
 
     Parameters
@@ -919,10 +880,8 @@ def logfile_to_obj(logfile, verbose=False):
     data = cclib.parser.ccopen(logfile).parse()
     data.quchemreport_logfile = os.path.basename(logfile)  # for messages only
     data_json = json.loads(data.writejson())
-    # openbabel sur XYZ
-    obdata = pybel.readstring("xyz", last_geometry_xyz(data))
     # construct raw data object 
-    data_model = full_report(logfile, data_json, data, obdata, verbose=verbose)
+    data_model = full_report(logfile, data_json, data, verbose=verbose)
     thermal = _electronic_thermal_energy(logfile)
     if thermal is not None:
         data_model.results.freq.electronic_thermal_energy = thermal
@@ -1033,7 +992,7 @@ def process_logfile(config: Config, logfile, logfile_idx, log_storage_path="", v
     ------
     ScanlogException
         No completed calculation in the file (message naming the missing termination
-        line), or a step that cclib or Open Babel cannot read.
+        line), or a step that cclib cannot read.
     """
     solver = config.common_solver
     
@@ -1069,7 +1028,7 @@ def process_logfile(config: Config, logfile, logfile_idx, log_storage_path="", v
             if verbose:
                 traceback.print_exc()
             raise ScanlogException(
-                f"Reading of '{logfile}' (step {step + 1}/{len(log_files)}) failed in cclib or Open Babel: "
+                f"Reading of '{logfile}' (step {step + 1}/{len(log_files)}) failed in cclib: "
                 f"{type(err).__name__}: {err}. Check this log file (or remove it from the YAML file)."
             ) from err
         data_model.metadata.config_idx = logfile_idx

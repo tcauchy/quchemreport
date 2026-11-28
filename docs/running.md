@@ -50,6 +50,6 @@ pictures, report. A test that fails stops the program with an explanation (see
 
 QuChemReport needs Python 3.12 with NumPy, SciPy, pydantic, PyYAML, cclib (with the two
 changes not yet released: core electrons of effective core potentials, PR #1972, and dispersion
-model, PR #1973), Open Babel with its Python bindings, QMCkl (Python bindings), Mayavi with
+model, PR #1973), RDKit, QMCkl (Python bindings), Mayavi with
 VTK, matplotlib, pylatex, and a LaTeX distribution with `pdflatex`. orbkit is only needed for
 comparisons with the former grid engine.

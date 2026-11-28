@@ -1,6 +1,6 @@
 """LogData: the data read from one calculation step (pydantic model).
 
-scanlog.logfile_to_obj fills one LogData per step of a log file, from cclib, RDKit and Open Babel.
+scanlog.logfile_to_obj fills one LogData per step of a log file, from cclib and RDKit.
 The model has four sections: ``metadata`` (file, parser), ``molecule`` (composition, charge,
 connectivity, starting geometry), ``comp_details`` (program, method, basis set, options) and
 ``results`` (wavefunction, geometry, frequencies, excited states). Units are those of cclib:
@@ -65,15 +65,13 @@ class MoleculeConnectivity(CustomModel):
 
 
 class Molecule(CustomModel):
-    """Composition and identity of the molecule: formula, atoms, charge, multiplicity, InChI,
-    SMILES, bonds and the starting geometry and energy of the calculation.
+    """Composition of the molecule: formula, atoms, charge, multiplicity, bonds and the
+    starting geometry and energy of the calculation.
     """
     # chirality, atoms_valence and the canonical SMILES 'can' (Open Babel) were removed on
     # 28/11/2026: nothing used them; whether a CD spectrum is drawn depends on the rotatory
-    # strengths, not on a perceived chirality.
-    inchi: str = None
-    smi: str = None
-    monoisotopic_mass: float = None
+    # strengths, not on a perceived chirality. InChI, SMILES and monoisotopic mass moved the
+    # same day to ComputedData (data_enrichment.compute, once for the reference log).
     connectivity: MoleculeConnectivity = MoleculeConnectivity()
     formula: str = None
     nb_atoms: int = None

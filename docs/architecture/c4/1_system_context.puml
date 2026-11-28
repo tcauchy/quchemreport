@@ -16,7 +16,6 @@ Boundary(th_read, $TH_READ) {
 }
 Boundary(th_mol, $TH_MOL) {
   System_Ext(rdkit, $RDKIT_NAME, $RDKIT_DESC)
-  System_Ext(obabel, $OBABEL_NAME, $OBABEL_DESC, $tags="replaced")
 }
 Boundary(th_grid, $TH_GRID) {
   System_Ext(qmckl, $QMCKL_NAME, $QMCKL_DESC)
@@ -34,7 +33,6 @@ Rel(user, qcprog, "Runs calculations with")
 Rel(user, qcr, "Gives a YAML file listing the log files; gets a PDF report and pictures from")
 Rel(qcr, cclib, "Parses the log files with")
 Rel(qcr, rdkit, "Perceives bonds, identifiers and equivalent atoms with")
-Rel(qcr, obabel, "Does the same today with")
 Rel(qcr, qmckl, "Evaluates orbitals and densities on grids with")
 Rel(qcr, vtk, "Draws the 3D pictures with")
 Rel(qcr, mpl, "Plots spectra with")

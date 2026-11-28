@@ -57,7 +57,8 @@ EXTREMA_RADIUS = 1.0
 #   times faster than the same loop reading numpy arrays element by element).
 PROMINENCE_MIN = 0.5 / 627.509
 # Equivalent extrema: same kind, nearest atoms in the same symmetry class of the molecular graph
-# (molecule_graph.symmetry_classes; Open Babel OBGraphSym until 28/11/2026) and values within EQUIVALENT_TOL (hartree/e; 0.3 kcal/mol), chained.
+# (molecule_graph.symmetry_classes; Open Babel OBGraphSym until 28/11/2026) and values within
+# EQUIVALENT_TOL (hartree/e; 0.3 kcal/mol), chained.
 # Why (same study): the class alone is not enough, since atoms equivalent in the graph can differ
 # by several kcal/mol through the conformation (median 2.1 kcal/mol between extrema of the same
 # class); the differences between symmetry equivalents come from the grid (21 % of the pairs of

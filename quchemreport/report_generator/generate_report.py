@@ -661,6 +661,10 @@ def render_molecule_identification(section, computed_data: ComputedData, designa
 
             if inchi is not None:
                 mol_table.add_row(['InChI'  , inchi ])
+            elif computed_data.molecule.identifiers_note:
+                # Bond orders not found (radical, ion, metal): say why rather than print nothing
+                mol_table.add_row(['InChI, SMILES', "not determined from the geometry: "
+                                   + computed_data.molecule.identifiers_note])
 
             # TODO : IS IT BETTER TO JUST TRUNCATE THE SMILES IF TOO LONG ?
             if (
